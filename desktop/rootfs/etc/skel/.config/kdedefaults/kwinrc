@@ -1,0 +1,31 @@
+# KWin defaults layer (user changes win over this file).
+# Decorations: vendored Colloid aurorae theme, macOS button order.
+[org.kde.kdecoration2]
+BorderSize=Tiny
+ButtonsOnLeft=XAI
+ButtonsOnRight=
+library=org.kde.kwin.aurorae
+theme=__aurorae__svg__Colloid-dark
+
+[DesktopSwitcher]
+LayoutName=org.kde.breeze.desktop
+
+[WindowSwitcher]
+LayoutName=org.kde.breeze.desktop
+
+[Plugins]
+blurEnabled=true
+contrastEnabled=true
+translucencyEnabled=true
+
+[Effect-blur]
+BlurStrength=8
+NoiseStrength=2
+
+[Effect-translucency]
+Dialogs=92
+DropdownMenus=88
+PopupMenus=88
+Menus=88
+Inactive=100
+MoveResize=100

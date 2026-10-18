@@ -1,0 +1,19 @@
+# The desktop's intnet link: STATIC by design (shipped images must
+# work with zero host-side setup — no DHCP in the path). 10.55.10.100,
+# DNS = the gateway's dnsmasq (Tor-only upstream), IPv6 disabled.
+# Matches any ethernet device (the machine has exactly one NIC, whatever its MAC);
+# NM requires mode 600 root-owned.
+[connection]
+id=ombra-intnet
+type=ethernet
+autoconnect=true
+autoconnect-priority=100
+
+[ipv4]
+method=manual
+address1=10.55.10.100/24,10.55.10.1
+dns=10.55.10.1;
+never-default=false
+
+[ipv6]
+method=disabled

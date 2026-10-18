@@ -1,0 +1,3 @@
+# systemd-networkd owns the NICs (matched by NIC driver); loopback only.
+auto lo
+iface lo inet loopback

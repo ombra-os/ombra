@@ -1,0 +1,12 @@
+# the Plasma Tor-dot widget polls `--once` every 31s (QML cannot open unix sockets); enabled via default.target.wants
+[Unit]
+Description=Ombra Tor-status daemon (gateway/tor/dns probes, local JSON socket)
+
+[Service]
+ExecStart=/usr/local/bin/ombra-statusd
+# a down gateway or cold Tor must never take the user session down
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

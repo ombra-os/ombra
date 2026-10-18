@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=kitty
+GenericName=Terminal
+Comment=Fast, feature-full, GPU based terminal
+Exec=env LIBGL_ALWAYS_SOFTWARE=1 kitty
+Icon=utilities-terminal
+Terminal=false
+Categories=System;TerminalEmulator;
+StartupNotify=true

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Tor Browser
+Comment=Tor Browser
+Exec=/usr/local/bin/tor-browser
+Icon=/usr/share/icons/hicolor/48x48/apps/tor-browser.png
+Terminal=false
+Categories=Network;
+StartupWMClass=Tor Browser Alpha

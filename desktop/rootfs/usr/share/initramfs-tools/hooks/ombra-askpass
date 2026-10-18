@@ -1,0 +1,20 @@
+#!/bin/sh
+# ombra-askpass initramfs hook — cryptsetup's own hook validates
+# keyscript= against the root fs but copies NOTHING for it: the binary
+# must be copied INTO the initrd at the exact path /etc/crypttab names,
+# or boot silently falls back to the stock console prompt.
+PREREQ=""
+
+prereqs() {
+    echo "$PREREQ"
+}
+
+case "$1" in
+    prereqs) prereqs; exit 0 ;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+mkdir -p "${DESTDIR}/usr/local/libexec/ombra"
+cp -p /usr/local/libexec/ombra/ombra-askpass \
+      "${DESTDIR}/usr/local/libexec/ombra/ombra-askpass"

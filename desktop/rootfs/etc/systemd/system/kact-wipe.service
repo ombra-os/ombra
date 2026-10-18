@@ -1,0 +1,10 @@
+[Unit]
+Description=Wipe persistent KActivities database before volatile mount
+Before=home-ombra-.local-share-kactivitymanagerd-resources.mount
+
+[Service]
+Type=oneshot
+ExecStart=/bin/rm -rf /home/ombra/.local/share/kactivitymanagerd/resources
+
+[Install]
+RequiredBy=home-ombra-.local-share-kactivitymanagerd-resources.mount

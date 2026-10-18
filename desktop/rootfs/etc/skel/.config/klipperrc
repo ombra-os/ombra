@@ -1,0 +1,4 @@
+# klipper: no history, no persistence; the clipboard itself is X11 and unaffected
+[General]
+KeepClipboardContents=false
+MaxClipItems=1

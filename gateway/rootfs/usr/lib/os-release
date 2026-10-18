@@ -1,0 +1,12 @@
+# Ombra OS identity — the machine's public face. ID reads "ombra"
+# (nothing on this image needs the debian token: apt is codename-keyed
+# and VERSION_CODENAME stays trixie; ID_LIKE keeps family dispatchers
+# working). No version on human surfaces; VERSION_ID and
+# DEBIAN_VERSION_FULL stay machine-facing (the file is dpkg-diverted).
+NAME="Ombra"
+PRETTY_NAME="Ombra"
+VERSION_ID=1.0
+VERSION_CODENAME=trixie
+DEBIAN_VERSION_FULL=13.7
+ID=ombra
+ID_LIKE=debian

@@ -1,0 +1,50 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Security issues go through the Security tab, not here. Do not paste identifying data, IP addresses or passphrases.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options: [Gateway VM, Desktop VM, Boot menu or unlock screen, First-use setup, Installer or build tooling, Documentation]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Release tag or commit
+    validations:
+      required: true
+  - type: dropdown
+    id: source
+    attributes:
+      label: How was it installed
+      options: [Release OVA, Built from source]
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Mac model, macOS and VMware Fusion versions
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Boot mode
+      options: [Amnesic, Persistent, Not applicable]
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true

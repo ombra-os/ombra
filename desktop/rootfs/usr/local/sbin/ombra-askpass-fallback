@@ -1,0 +1,21 @@
+#!/bin/sh
+live() { [ -r /run/ombra/askpass-live ] && kill -0 "$(cat /run/ombra/askpass-live 2>/dev/null)" 2>/dev/null; }
+stop() { [ -n "$child" ] && kill "$child" 2>/dev/null && wait "$child" 2>/dev/null; child=; }
+child=
+trap 'stop; exit 0' TERM INT
+i=0
+while [ "$i" -lt 20 ] && ! live; do sleep 1; i=$((i + 1)); done
+dead=0
+while :; do
+    if live; then
+        dead=0
+        [ -n "$child" ] && stop
+    else
+        dead=$((dead + 1))
+        if [ "$dead" -ge 2 ] && { [ -z "$child" ] || ! kill -0 "$child" 2>/dev/null; }; then
+            /bin/systemd-tty-ask-password-agent --watch &
+            child=$!
+        fi
+    fi
+    sleep 1
+done

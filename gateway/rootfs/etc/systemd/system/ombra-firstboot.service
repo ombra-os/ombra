@@ -1,0 +1,13 @@
+[Unit]
+Description=Ombra gateway first-boot bring-up (one-shot)
+# Runs before networking is expected to be useful; it only stamps state.
+After=local-fs.target
+Before=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ombra-firstboot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,6 @@
+# the connectivity panel greets the FIRST interactive shell of a login session, once (child terminals stay quiet)
+
+if [ -z "${OMBRA_GREETED:-}" ] && [ -t 1 ] && [ -x /usr/local/bin/ombra ]; then
+    export OMBRA_GREETED=1
+    /usr/local/bin/ombra
+fi

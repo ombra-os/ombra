@@ -1,0 +1,12 @@
+[Unit]
+Description=KActivities recording database on volatile tmpfs (nothing persists)
+After=home.mount
+
+[Mount]
+What=tmpfs
+Where=/home/ombra/.local/share/kactivitymanagerd/resources
+Type=tmpfs
+Options=mode=0700,uid=1000,gid=1000
+
+[Install]
+WantedBy=multi-user.target

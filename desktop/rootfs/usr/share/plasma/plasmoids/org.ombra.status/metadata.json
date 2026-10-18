@@ -1,0 +1,19 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Ombra"
+            }
+        ],
+        "Category": "Utilities",
+        "Description": "Tor-status dot for the dock: green when all traffic routes through the Ombra gateway, yellow when the Tor path is degraded, red when it fails, grey when the status daemon is not answering",
+        "EnabledByDefault": false,
+        "Icon": "security-high",
+        "Id": "org.ombra.status",
+        "License": "GPL-3.0",
+        "Name": "Ombra Tor Status",
+        "Version": "1.0"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

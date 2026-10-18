@@ -1,0 +1,98 @@
+#!/bin/sh
+#
+# ombra-timesync — keep the gateway clock sane using nothing but Tor.
+#
+# WHY this exists: Tor needs a correct clock (consensus freshness,
+# certificate validity, guard handshakes). The gateway has no direct
+# network path, so classic NTP is unavailable — and would be a leak if
+# it were. Fusion sets the RTC from the host at boot, but the guest
+# clock then free-runs: a host sleep mid-session leaves the guest
+# minutes behind, and every such pause accumulates permanent skew
+# until Tor refuses to bootstrap. The clock's reference must ride Tor
+# itself: read the Date header of HTTPS responses fetched THROUGH
+# Tor's local SOCKS port. No new network path is opened — the firewall
+# already allows loopback->tor (dnsmasq uses it) and debian-tor egress.
+#
+# Integrity rule: never trust ONE source. Require the majority of the
+# URL pool to agree within AGREE seconds before doing anything, and only
+# step the clock when the measured offset exceeds STEP seconds (small
+# offsets are left alone: sub-minute steps churn Tor's internals for no
+# benefit). On any disagreement or failure: log and exit 0 — a slow
+# clock degrades Tor gracefully; a WRONG clock set by a hostile source
+# would not. Failing safe means changing nothing.
+#
+# Exit status is always 0 unless the environment is broken (missing
+# curl): a timer drives this, and a nonzero exit would just spam
+# "failed" alerts for a condition the next run usually fixes.
+
+set -u
+
+STEP=90      # seconds: only step the clock beyond this offset
+AGREE=30     # sources must agree pairwise within this to be trusted
+TIMEOUT=25   # per-source curl timeout (Tor fetches can be slow)
+# Pool: well-run, TLS-reachable-through-Tor sites run by parties with no
+# interest in Ombra users specifically. check.torproject.org is already
+# part of this gateway's test vocabulary; debian.org serves every Debian
+# user on earth; archive.org is a third independent operator. An attack
+# needs a majority of these to collude AND defeat TLS through Tor.
+URLS="https://check.torproject.org https://www.debian.org https://archive.org"
+
+log() { echo "ombra-timesync: $*"; }
+
+command -v curl >/dev/null 2>&1 || { log "FATAL: curl missing"; exit 1; }
+
+dates=""
+for url in $URLS; do
+    # -sI: HEAD only; --socks5-hostname: name resolution happens inside
+    # Tor (no local DNS path involved); loopback SOCKS is firewall-
+    # allowed for everyone, and the fetch itself egresses as debian-tor.
+    d=$(curl -sI --max-time "$TIMEOUT" --socks5-hostname 127.0.0.1:9050 "$url" \
+        | tr -d '\r' | awk 'tolower($1)=="date:" { $1=""; sub(/^ /,""); print; exit }')
+    if [ -n "$d" ]; then
+        # GNU date parses RFC-822-as-HTTP dates directly; -u normalizes.
+        t=$(date -u -d "$d" +%s 2>/dev/null) || t=""
+        [ -n "$t" ] && dates="$dates $t"
+    fi
+done
+
+n=$(echo $dates | wc -w)
+if [ "$n" -lt 2 ]; then
+    log "fewer than 2 sources answered ($n) — leaving the clock alone"
+    exit 0
+fi
+
+# Majority agreement: for each source, count sources within AGREE of it;
+# pick the largest clique. With 3 sources that means at least 2 agree.
+best_t=0; best_c=0
+for t in $dates; do
+    c=0
+    for u in $dates; do
+        d=$((u - t)); [ "$d" -lt 0 ] && d=$((-d))
+        [ "$d" -le "$AGREE" ] && c=$((c + 1))
+    done
+    if [ "$c" -gt "$best_c" ]; then best_c=$c; best_t=$t; fi
+done
+
+if [ "$best_c" -lt 2 ]; then
+    log "sources disagree (got:$dates) — leaving the clock alone"
+    exit 0
+fi
+if [ "$best_c" -ne "$n" ]; then
+    log "note: $((n - best_c)) outlier source(s) ignored (got:$dates)"
+fi
+
+now=$(date -u +%s)
+delta=$((best_t - now))
+[ "$delta" -lt 0 ] && mag=$((-delta)) || mag=$delta
+
+if [ "$mag" -le "$STEP" ]; then
+    log "offset ${mag}s within ${STEP}s tolerance — no step (consensus of $best_c/$n)"
+    exit 0
+fi
+
+if date -u -s "@$best_t" >/dev/null 2>&1 || date -u "$best_t" >/dev/null 2>&1; then
+    log "stepped clock by ${delta}s to consensus $(date -u +%FT%TZ) ($best_c/$n sources)"
+else
+    log "clock step FAILED (no permission?) — needs CAP_SYS_TIME"
+fi
+exit 0

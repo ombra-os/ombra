@@ -1,0 +1,16 @@
+# the one boot-time question: does the PUBLIC build key still open the disk? The LUKS header is the only source of truth.
+# DEAD -> writes /run/ombra/setup-complete; ALIVE -> no marker, ombra-welcome takes the console.
+
+[Unit]
+Description=Ombra setup gate (disk-key probe)
+# welcome and sddm condition on the marker this writes
+Before=ombra-welcome.service sddm.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/ombra/ombra-welcome --probe
+# a probe failure must not block boot: the safe default is "incomplete"
+RemainAfterExit=no
+
+[Install]
+WantedBy=graphical.target

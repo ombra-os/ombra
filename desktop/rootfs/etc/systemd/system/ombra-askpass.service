@@ -1,0 +1,13 @@
+# post-boot half of "ombra owns every passphrase prompt" (the initramfs half is the crypttab keyscript)
+
+[Unit]
+Description=Ombra ask-passphrase agent
+After=systemd-user-sessions.service ombra-welcome.service
+
+[Service]
+ExecStart=/usr/local/libexec/ombra/ombra-askpass
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

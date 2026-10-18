@@ -1,0 +1,29 @@
+#!/bin/sh
+# The restore path never instantiates the LED's QML (plasma 6.3 silently
+# drops this applet's deferred preload on panel restore — no log, no
+# error). The live-add path instantiates it reliably: after every
+# session start, remove the dead entry the restore created, add it back
+# and put it first in the bar. Fail-soft: no plasmashell, no panel,
+# nothing to do.
+i=0
+while [ "$i" -lt 60 ]; do
+    if dbus-send --session --dest=org.kde.plasmashell --type=method_call \
+        --print-reply /PlasmaShell org.freedesktop.DBus.Peer.Ping >/dev/null 2>&1; then
+        break
+    fi
+    i=$((i + 2))
+    sleep 2
+done
+sleep 8
+present=$(dbus-send --session --print-reply --dest=org.kde.plasmashell /PlasmaShell \
+    org.kde.PlasmaShell.evaluateScript \
+    string:'var p=panels()[0]; var ids=p.widgetIds; var out=[]; for (var i=0;i<ids.length;i++){ out.push(p.widgetById(ids[i]).type); } out.join(",");' \
+    2>/dev/null | sed -n 's/^   string "//p')
+case "$present" in
+    *org.ombra.status*) ;;
+    *) exit 0 ;;
+esac
+dbus-send --session --print-reply --dest=org.kde.plasmashell /PlasmaShell \
+    org.kde.PlasmaShell.evaluateScript \
+    string:'var p=panels()[0]; var ids=p.widgetIds.slice(); for (var i=0;i<ids.length;i++){ var w=p.widgetById(ids[i]); if (w.type==="org.ombra.status"){ w.remove(); } } var w=p.addWidget("org.ombra.status"); p.currentConfigGroup=["General"]; var order=p.readConfig("AppletOrder")||""; order=order.split(";").filter(function(x){return x!==String(w.id) && x!=="";}).join(";"); p.writeConfig("AppletOrder", String(w.id)+";"+order); print("ensured id="+w.id);' \
+    >/dev/null 2>&1

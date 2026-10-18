@@ -1,0 +1,3 @@
+# /etc/zsh/zprofile — login-shell one-shots (zsh reads this, NOT
+# .profile). NO splash trigger here: the panel greeting IS the login
+# report; ombra-systemcheck stays a manual/health run.

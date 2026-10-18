@@ -1,0 +1,28 @@
+version = 1
+SPDX-PackageName = "Ombra"
+SPDX-PackageDownloadLocation = "https://github.com/ombra-os/ombra"
+
+[[annotations]]
+path = [
+  "core/**",
+  "build/**",
+  "tests/**",
+  "docs/**",
+  "README.md",
+  "SECURITY.md",
+  "REUSE.toml",
+  ".github/**",
+  "gateway/**",
+  "desktop/late-command.sh",
+  "desktop/preseed.cfg",
+  "desktop/README.md",
+  "desktop/rootfs/README.md",
+  "desktop/rootfs/etc/**",
+  "desktop/rootfs/usr/local/**",
+  "desktop/rootfs/usr/share/backgrounds/**",
+  "desktop/rootfs/usr/share/plasmoids/org.ombra.status/**",
+  "desktop/rootfs/usr/share/plasma/plasmoids/org.ombra.status/**",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Xen"
+SPDX-License-Identifier = "GPL-3.0-or-later"

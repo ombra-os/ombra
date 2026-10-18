@@ -1,0 +1,74 @@
+desktop-color: "#0b0c11"
+title-text: ""
+terminal-font: "@FONT16@"
+terminal-left: "0"
+terminal-top: "0"
+terminal-width: "100%"
+terminal-height: "100%"
+terminal-border: "0"
+
++ image {
+    left = 50%-59
+    top = 8%
+    file = "logo.png"
+}
+
++ label {
+    left = 0
+    top = 8%+140
+    width = 100%
+    align = "center"
+    text = "O M B R A"
+    font = "@FONTTITLE@"
+    color = "#f4f3ef"
+}
+
++ label {
+    left = 0
+    top = 8%+192
+    width = 100%
+    align = "center"
+    text = "choose how this machine starts"
+    font = "@FONT16@"
+    color = "#8b8d93"
+}
+
++ boot_menu {
+    left = 50%-360
+    top = 8%+250
+    width = 720
+    height = 150
+    item_font = "@FONT16@"
+    item_color = "#f4f3ef"
+    selected_item_font = "@FONT16@"
+    selected_item_color = "#0b0c11"
+    item_height = 44
+    item_padding = 16
+    item_spacing = 10
+    icon_width = 0
+    icon_height = 0
+    item_icon_space = 0
+    scrollbar = false
+    menu_pixmap_style = "menu_*.png"
+    selected_item_pixmap_style = "sel_*.png"
+}
+
++ label {
+    left = 0
+    top = 100%-96
+    width = 100%
+    align = "center"
+    text = "up / down  choose        enter  start"
+    font = "@FONT16@"
+    color = "#8b8d93"
+}
+
++ label {
+    left = 0
+    top = 100%-32
+    width = 100%
+    align = "center"
+    text = "om·bra  /'om.brä/  shadow."
+    font = "@FONT16@"
+    color = "#8b8d93"
+}

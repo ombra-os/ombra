@@ -1,0 +1,22 @@
+# first-use setup on tty1, shown while the build key still opens the disk (per-boot probe — the disk is the state)
+
+[Unit]
+Description=Ombra first-use setup (disk passphrase + user password)
+# /run marker, written by ombra-setup-gate iff the build key is dead
+ConditionPathExists=!/run/ombra/setup-complete
+Before=sddm.service
+After=systemd-user-sessions.service ombra-setup-gate.service
+
+[Service]
+Type=oneshot
+TTYPath=/dev/tty1
+StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+ExecStart=/usr/local/libexec/ombra/ombra-welcome
+TimeoutStartSec=0
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical.target

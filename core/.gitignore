@@ -1,0 +1,3 @@
+# dist/ IS tracked: it is the hash-pinned artifact source for the ISO.
+# Only the build scratch dir is ignored.
+/target

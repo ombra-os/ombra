@@ -1,0 +1,18 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Ombra"
+            }
+        ],
+        "Category": "",
+        "Dependencies": [],
+        "Description": "Ombra dark plasma style",
+        "EnabledByDefault": true,
+        "Id": "Colloid-dark",
+        "License": "GPL 3.0",
+        "Name": "Ombra-dark",
+        "Version": "0.1",
+        "Website": "https://github.com/ombra-os/ombra"
+    }
+}

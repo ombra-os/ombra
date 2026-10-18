@@ -1,0 +1,17 @@
+[Unit]
+# Boot face: ombra-splash on tty1, via the console auto-login hook and
+# the +20s timer as a no-op fallback. Detailed report: sudo ombra-systemcheck.
+Description=Ombra gateway console splash (boot health verdict)
+
+[Service]
+Type=oneshot
+# keeps is-active "active" after a green splash
+RemainAfterExit=yes
+# the splash opens /dev/tty1 itself; the check engine setpriv-drops and
+# renders nftables in a netns — setuid caps + AF_NETLINK must survive
+ExecStart=/usr/local/sbin/ombra-splash --boot
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+TimeoutStartSec=240

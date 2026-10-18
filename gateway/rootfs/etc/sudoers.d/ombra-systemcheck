@@ -1,0 +1,3 @@
+# the console auto-login triggers the boot health report without a password prompt — this ONE command only.
+# Plain start, NOT --wait: with RemainAfterExit=yes, --wait never returns and the login shell hangs.
+ombra ALL=(root) NOPASSWD: /usr/bin/systemctl start ombra-systemcheck.service

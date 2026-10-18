@@ -1,0 +1,4 @@
+# KDE telemetry — EXPLICITLY OFF (kills the encouragement dialog too).
+[UserFeedback]
+StatisticsCollectionMode=NoStatistics
+SurveyInterval=-1

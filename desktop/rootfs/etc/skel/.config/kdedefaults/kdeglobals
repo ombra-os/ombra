@@ -1,0 +1,27 @@
+# KDE defaults layer (kdedefaults is first in XDG_CONFIG_DIRS: these
+# are KConfig DEFAULTS — user changes win).
+# Look-and-feel: vendored Colloid-dark L&F, which plasma-shell reads to
+# find the dock layout script. Widget style: kvantum-dark; the theme is
+# chosen by ~/.config/Kvantum/kvantum.kvconfig -> vendored ColloidDark.
+# No display-scale keys: the guest runs at 100% on Fusion's auto-fit
+# logical resolution — sizing belongs to the user and the host, not the
+# image.
+[General]
+ColorScheme=ColloidDark
+XftHintStyle=hintfull
+XftSubPixel=rgb
+font=Noto Sans,10,-1,5,400,0,0,0,0,0
+fixed=JetBrainsMono Nerd Font,10,-1,5,400,0,0,0,0,0
+menuFont=Noto Sans,10,-1,5,400,0,0,0,0,0
+smallestReadableFont=Noto Sans,8,-1,5,400,0,0,0,0,0
+toolBarFont=Noto Sans,10,-1,5,400,0,0,0,0,0
+TerminalService=kitty.desktop
+
+[Icons]
+Theme=Kaze-dark
+
+[KDE]
+LookAndFeelPackage=com.github.vinceliuice.Colloid-dark
+widgetStyle=kvantum-dark
+# mouse-first: folders open on double click
+SingleClick=false

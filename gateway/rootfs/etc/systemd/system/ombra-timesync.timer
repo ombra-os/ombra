@@ -1,0 +1,13 @@
+[Unit]
+Description=Periodic ombra-timesync (guest clock free-runs; host pauses skew it)
+
+[Timer]
+# boot grace: tor needs ~a minute to bootstrap
+OnBootSec=90s
+# monotonic cadence: repairs host-sleep skew shortly after each resume
+OnUnitInactiveSec=30min
+AccuracySec=15s
+Unit=ombra-timesync.service
+
+[Install]
+WantedBy=timers.target

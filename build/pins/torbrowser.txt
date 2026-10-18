@@ -1,0 +1,10 @@
+# Tor Browser (alpha channel — the ONLY channel with linux-aarch64
+# builds; stable 15.x ships x86-only)
+version=16.0a13
+file=tor-browser-linux-aarch64-16.0a13.tar.xz
+sha256=4dba033e7c5fb00f8d23fb5412a0825cd13aee565d31fc84b329d0927ac6ccf7
+manifest=sha256sums-signed-build.txt
+manifest_signer_keyid=022DA248432D2A0E0F54E65E316C1FACD62D07D9
+manifest_signer=Tor Browser Developers (signing key) <torbrowser@torproject.org>
+# manifest/signer lines are the upstream provenance record; the enforced anchor is the sha256 above
+url=https://dist.torproject.org/torbrowser/16.0a13/

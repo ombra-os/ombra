@@ -1,0 +1,5 @@
+[Match]
+Driver=e1000e
+
+[Link]
+Name=ombra-intnet

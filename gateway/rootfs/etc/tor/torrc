@@ -1,0 +1,44 @@
+# Ombra gateway torrc — Tor client; egress permitted only for the
+# debian-tor uid (the fail-closed half lives in nftables).
+
+User debian-tor
+DataDirectory /var/lib/tor
+AvoidDiskWrites 1
+SafeLogging 1
+Log notice syslog
+
+ClientOnly 1
+DirCache 0
+
+# ---- ports for the desktop ----
+SocksPort 10.55.10.1:9050 IsolateDestAddr IsolateDestPort
+# nftables prerouting REDIRECT lands here
+TransPort 10.55.10.1:9040
+# dnsmasq (desktop :53) forwards here; loopback-only
+DNSPort 127.0.0.1:5353
+
+# ---- .onion over DNS (transparent-proxy clients) ----
+# automapped synthetic addresses ride the REDIRECT to TransPort like
+# any other TCP. Tor enforces a /16 minimum here (a /24 is rejected at
+# config parse); 10.66/16 cannot collide with the intnet.
+AutomapHostsOnResolve 1
+VirtualAddrNetworkIPv4 10.66.0.0/16
+
+# gateway-local SOCKS for the leak-test harness
+SocksPort 127.0.0.1:9050
+
+# loopback-only control port: ombra-torctl-filter is the only client
+# (and the only intnet listener); cookie auth gates the filter itself
+ControlPort 127.0.0.1:9051
+CookieAuthentication 1
+# the filter's upstream cookie: group-readable by debian-tor, whose only
+# member is the filter service (SupplementaryGroups, not /etc/group)
+CookieAuthFile /run/tor/control.authcookie
+CookieAuthFileGroupReadable 1
+# Debian's tor-service-defaults arms a GroupWritable ControlSocket; no unix
+# control socket exists at all, so there is no side door to the control port
+ControlSocket 0
+
+# an idle gateway must never doze on the desktop (the consensus fetch
+# stall would read as a dead link)
+DormantTimeoutEnabled 0

@@ -1,0 +1,14 @@
+[Match]
+Driver=vmxnet3
+
+[Network]
+# DHCP upstream — distributable by construction: works on ANY host's Fusion NAT, whatever subnet it picked.
+# The lease's DNS and NTP are ignored: the gateway resolves only via dnsmasq -> Tor, and ombra-timesync owns time.
+DHCP=yes
+IPv6AcceptRA=no
+LinkLocalAddressing=no
+
+[DHCPv4]
+SendHostname=no
+UseDNS=false
+UseNTP=false

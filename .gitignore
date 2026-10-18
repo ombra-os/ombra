@@ -1,0 +1,49 @@
+# macOS noise
+.DS_Store
+
+# Editor droppings
+*.swp
+*~
+
+# VM images — never commit images or logs
+*.vdi
+*.vmdk
+*.qcow2
+
+# Logs
+*.log
+
+# Installer ISOs live in build/isos/ — never commit them
+*.iso
+build/isos/
+
+# Build-time generated
+build/keys/
+build/logs/
+build/releases/
+
+# Generated installer artifacts
+build/disks/
+__pycache__/
+*.pyc
+build/vendor/
+
+# Local-only hygiene allowlist (never ships)
+tests/build/.hygiene-allowlist
+
+# Rust build output
+target/
+
+# Never commit key material or environment files
+*.pem
+*.key
+id_*
+.env
+
+# Editor and VM leftovers
+._*
+*.orig
+*.bak
+*.nvram
+*.lck
+.vmwarevm/

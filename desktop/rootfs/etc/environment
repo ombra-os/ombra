@@ -1,0 +1,4 @@
+ALL_PROXY=socks5h://10.55.10.1:9050
+all_proxy=socks5h://10.55.10.1:9050
+NO_PROXY=localhost,127.0.0.1,10.55.10.0/24
+no_proxy=localhost,127.0.0.1,10.55.10.0/24

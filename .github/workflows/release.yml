@@ -1,0 +1,95 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  isos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Refuse a test-build environment
+        run: |
+          if [ -n "${OMBRA_TEST_GUEST_PASSWORD:-}" ]; then
+            echo "OMBRA_TEST_GUEST_PASSWORD is set in the runner environment; release builds must be plain" >&2
+            exit 1
+          fi
+
+      - name: Install xorriso
+        run: brew install xorriso
+
+      - name: Read the pinned toolchain
+        id: toolchain
+        run: echo "version=$(awk -F'\"' '/^channel/{print $2}' core/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: ${{ steps.toolchain.outputs.version }}
+          targets: aarch64-unknown-linux-musl
+
+      - name: Rust test suite
+        run: cargo test --locked
+        working-directory: core
+
+      - name: Late-command parser check
+        run: python3 tests/build/late-command-walker.py gateway/late-command.sh desktop/late-command.sh
+
+      - name: Fetch the pinned netinst ISO
+        run: |
+          filename="$(awk -F= '$1=="filename"{print $2}' build/pins/debian-netinst-arm64.txt)"
+          version="$(printf '%s' "$filename" | sed -E 's/^debian-([0-9.]+)-arm64-netinst.iso$/\1/')"
+          mkdir -p build/isos
+          curl -fL --retry 3 -o "build/isos/${filename}" \
+            "https://cdimage.debian.org/cdimage/archive/${version}/arm64/iso-cd/${filename}"
+          test -s "build/isos/${filename}"
+
+      - name: Verify the netinst against its pin
+        run: bash build/verify-iso.sh
+
+      - name: Fetch the pinned Tor Browser payload
+        run: |
+          url="$(awk -F= '$1=="url"{print $2}' build/pins/torbrowser.txt)"
+          file="$(awk -F= '$1=="file"{print $2}' build/pins/torbrowser.txt)"
+          want="$(awk -F= '$1=="sha256"{print $2}' build/pins/torbrowser.txt)"
+          mkdir -p build/vendor
+          curl -fL --retry 3 -o "build/vendor/${file}" "${url}${file}"
+          printf '%s  %s\n' "$want" "build/vendor/${file}" | shasum -a 256 -c -
+
+      - name: Cross-build the binaries
+        run: bash build.sh
+        working-directory: core
+
+      - name: Ship binaries into the overlay
+        run: |
+          cp dist/aarch64/ombra-askpass dist/aarch64/ombra-welcome \
+             ../desktop/rootfs/usr/local/libexec/ombra/
+          cp dist/aarch64/ombra dist/aarch64/ombra-statusd \
+             ../desktop/rootfs/usr/local/bin/
+          cp dist/aarch64/ombra-torctl-filter \
+             ../gateway/rootfs/usr/local/bin/
+        working-directory: core
+
+      - name: Build and assert both ISOs
+        run: bash tests/build/test-install-iso.sh
+
+      - name: Upload the gateway ISO
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ombra-install-gateway-arm64
+          path: build/disks/ombra-install-gateway.iso
+          retention-days: 14
+
+      - name: Upload the desktop ISO
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ombra-install-desktop-arm64
+          path: build/disks/ombra-install-desktop.iso
+          retention-days: 14

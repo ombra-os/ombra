@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic ombra-timesync on the desktop (clock free-runs; host pauses skew it)
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=30min
+AccuracySec=15s
+Unit=ombra-timesync.service
+
+[Install]
+WantedBy=timers.target

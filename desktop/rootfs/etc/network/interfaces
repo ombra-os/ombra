@@ -1,0 +1,3 @@
+# loopback only: a stanza here for the real NIC would make NM treat it as UNMANAGED (Debian ships the ifupdown plugin)
+auto lo
+iface lo inet loopback

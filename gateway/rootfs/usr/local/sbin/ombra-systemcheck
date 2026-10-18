@@ -1,0 +1,242 @@
+#!/bin/sh
+#
+# ombra-systemcheck — the gateway's health report (tor bootstrapped,
+# firewall == shipped file, DNS only through Tor, egress closed, clock
+# sane, no stray listeners or failed units).
+# Modes: [--boot] (wait for tor bootstrap) [--summary] (silent;
+# machine-readable FAILED=/SKIPPED= lines for ombra-splash).
+# Exit code = number of failed checks. Color only on a terminal.
+
+set -u
+
+BOOT_WAIT=150     # --boot: max seconds to wait for "Bootstrapped 100%"
+NET_TIMEOUT=45    # per network probe (fresh isolated circuits can be slow)
+SUMMARY=0         # --summary: engine mode for ombra-splash
+for arg in "$@"; do
+    case "$arg" in
+        --summary) SUMMARY=1 ;;
+    esac
+done
+
+C_GREEN=''; C_RED=''; C_YELLOW=''; C_BOLD=''; C_OFF=''
+if [ -t 1 ]; then
+    C_GREEN='\033[1;38;5;78m'; C_RED='\033[1;38;5;210m'; C_YELLOW='\033[1;38;5;221m'
+    C_BOLD='\033[1m'; C_OFF='\033[0m'
+fi
+
+FAILS=0
+SKIPS=0
+ROOTED=0; [ "$(id -u)" = 0 ] && ROOTED=1
+TMP=$(mktemp -d /tmp/ombra-syscheck.XXXXXX)
+trap 'rm -rf "$TMP"' EXIT
+
+# root-owned-state checks [SKIP] unprivileged — never FAIL for them
+pad() { printf '%s%*s' "$1" $((24 > ${#1} ? 24 - ${#1} : 0)) ''; }
+if [ "$SUMMARY" -eq 1 ]; then
+    pass() { :; }
+    warn() { :; }
+    fail() { FAILS=$((FAILS + 1)); }
+    skip() { SKIPS=$((SKIPS + 1)); }
+    info() { :; }
+else
+    pass() { printf '  %b[ OK ]%b  %s\n' "$C_GREEN" "$C_OFF" "$(pad "$1")$2"; }
+    warn() { printf '  %b[WARN]%b  %s\n' "$C_YELLOW" "$C_OFF" "$(pad "$1")$2"; }
+    fail() { FAILS=$((FAILS + 1)); printf '  %b[FAIL]%b  %s\n' "$C_RED" "$C_OFF" "$(pad "$1")$2"; }
+    skip() { SKIPS=$((SKIPS + 1)); printf '  %b[SKIP]%b  %s\n' "$C_BOLD" "$C_OFF" "$(pad "$1")$2"; }
+    info() { printf '            %s\n' "$1"; }
+fi
+
+# ---------------------------------------------------------------- boot wait
+if [ "${1:-}" = "--boot" ]; then
+    # write straight to the console tty (TTYPath machinery exited 2
+    # in unit context); /dev/tty1 is a color terminal, force the palette
+    if [ -w /dev/tty1 ] && [ "$SUMMARY" -ne 1 ]; then
+        exec >>/dev/tty1 2>&1
+        C_GREEN='\033[1;38;5;78m'; C_RED='\033[1;38;5;210m'; C_YELLOW='\033[1;38;5;221m'
+        C_BOLD='\033[1m'; C_OFF='\033[0m'
+        printf '\033[H\033[2J'
+    fi
+    [ "$SUMMARY" -ne 1 ] && printf 'ombra gateway - boot health check (waiting up to %ss for Tor)\n' "$BOOT_WAIT"
+    i=0
+    while [ "$i" -lt "$BOOT_WAIT" ]; do
+        journalctl -u tor@default -b --no-pager 2>/dev/null | grep -q 'Bootstrapped 100% (done)' && break
+        sleep 5; i=$((i + 5))
+    done
+fi
+
+[ "$SUMMARY" -ne 1 ] && printf '%b== ombra-gateway system check ==%b  %s  (up %s)\n\n' \
+    "$C_BOLD" "$C_OFF" "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" \
+    "$(cut -d. -f1 /proc/uptime | awk '{printf "%dm%02ds", $1/60, $1%60}')"
+
+
+# ------------------------------------------------------------------- checks
+# 1. tor running and bootstrapped this boot (journal is root-readable)
+if [ "$ROOTED" -ne 1 ]; then
+    skip "Tor" "requires root - run: sudo ombra-systemcheck"
+elif systemctl is-active --quiet tor@default 2>/dev/null; then
+    if journalctl -u tor@default -b --no-pager 2>/dev/null | grep -q 'Bootstrapped 100% (done)'; then
+        pass "Tor" "bootstrapped 100% (service active)"
+    else
+        fail "Tor" "active but NOT bootstrapped 100% this boot - no circuits"
+        info "last: $(journalctl -u tor@default -b --no-pager 2>/dev/null | grep -E 'Bootstrapped' | tail -1 | sed 's/^.*Tor\[[0-9]*\]: //')"
+    fi
+else
+    fail "tor@default is not running"
+fi
+
+# 2. firewall: kernel ruleset must equal the shipped file
+if [ "$ROOTED" -ne 1 ]; then
+    skip "Firewall" "requires root - run: sudo ombra-systemcheck"
+else
+    nft list ruleset >"$TMP/live.nft" 2>/dev/null
+    if unshare -n sh -c "nft -f /etc/nftables.conf && nft list ruleset" >"$TMP/file.nft" 2>/dev/null; then
+        sed -E 's/counter packets [0-9]+ bytes [0-9]+/counter/g' "$TMP/live.nft" >"$TMP/live.norm"
+        sed -E 's/counter packets [0-9]+ bytes [0-9]+/counter/g' "$TMP/file.nft" >"$TMP/file.norm"
+        if diff -q "$TMP/live.norm" "$TMP/file.norm" >/dev/null; then
+            pass "Firewall" "live ruleset == shipped file (fail-closed)"
+        else
+            fail "Firewall" "DRIFT: kernel ruleset differs from the shipped file"
+            diff "$TMP/file.norm" "$TMP/live.norm" | head -4 | sed 's/^/         /'
+        fi
+    else
+        fail "Firewall" "could not render /etc/nftables.conf (nft parse error?)"
+    fi
+fi
+
+# 3. fail-closed egress: a non-tor process must be REFUSED fast.
+# setpriv, not su (no PAM session exists in a service context).
+if [ "$ROOTED" -ne 1 ]; then
+    skip "Egress" "requires root - run: sudo ombra-systemcheck"
+else
+    EG_RC=$(setpriv --reuid=ombra --regid=ombra --init-groups /bin/sh -c 'curl --connect-timeout 8 -sS -o /dev/null https://check.torproject.org/ 2>/dev/null || echo x$?' 2>&1)
+    case "$EG_RC" in
+        x7)  pass "Egress" "non-tor processes refused (fail-closed holds)" ;;
+        x0)  fail "Egress" "NOT refused - firewall off (curl connected)" ;;
+        x28) fail "Egress" "NOT refused - drop, not reject (curl timeout)" ;;
+        *)   fail "Egress" "probe did not run: ${EG_RC:-no output}" ;;
+    esac
+fi
+
+# 4. DNS: dnsmasq runs, and Tor's resolver answers (SOCKS RESOLVE for
+#    names; the DNSPort automap for .onion). The gateway cannot query its
+#    own dnsmasq: it serves ombra-intnet only (except-interface=lo).
+dns_query() {
+    timeout $(($3 + 3)) bash -c 'exec 3<>"/dev/udp/$0/$1" || exit 1
+        printf "\x12\x36\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00$3\x00\x00\x01\x00\x01" >&3
+        timeout "$2" dd bs=512 count=1 <&3 2>/dev/null | od -An -tu1' "$1" "$2" "$3" "$4" 2>/dev/null
+}
+tr_resolve() { timeout 30 tor-resolve "$1" 127.0.0.1:9050 2>/dev/null; }
+A=$(tr_resolve deb.debian.org)
+[ -z "$A" ] && { sleep 5; A=$(tr_resolve deb.debian.org); }
+if [ -n "$A" ] && systemctl is-active --quiet dnsmasq 2>/dev/null; then
+    pass "DNS" "dnsmasq up; Tor resolver answers"
+else
+    fail "DNS" "dnsmasq down or Tor resolver not answering"
+fi
+unset A
+ONION=$(dns_query 127.0.0.1 5353 15 '\x382gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid\x05onion')
+ONION=$(printf '%s' "$ONION" | tr -s ' \n' '\n\n' | tail -4 | tr '\n' '.' | sed 's/\.$//')
+case "$ONION" in
+    10.66.*) pass "Onion DNS" "automap resolves into the synthetic range" ;;
+    *)       fail "Onion DNS" "automap broken" ;;
+esac
+unset ONION
+
+# 5. SOCKS path reaches the real Tor network; one retry (a fresh
+#    circuit can blow the window once). The answer body is checked and
+#    dropped — no exit IP reaches a screen or a log.
+socks_probe() {
+    timeout $((NET_TIMEOUT + 15)) curl -sS --max-time "$NET_TIMEOUT" \
+        --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/api/ip 2>/dev/null
+}
+BODY=$(socks_probe); [ -z "$BODY" ] && BODY=$(socks_probe)
+if printf '%s' "$BODY" | grep -q '"IsTor":true'; then
+    pass "Tor exit" "check.torproject.org confirms IsTor:true"
+else
+    fail "Tor exit" "probe failed (check.torproject.org did not confirm)"
+fi
+unset BODY
+
+# 6. last ombra-timesync verdict
+if [ "$ROOTED" -ne 1 ]; then
+    skip "Clock" "requires root - run: sudo ombra-systemcheck"
+else
+    TS_LAST=$(journalctl -u ombra-timesync --no-pager -n 5 2>/dev/null | grep 'ombra-timesync:' | tail -1 | sed 's/.*ombra-timesync: //')
+    case "$TS_LAST" in
+        *stepped*|*'no step'*|*within*) pass "Clock" "$TS_LAST" ;;
+        "")                             warn "Clock" "no ombra-timesync run on record yet" ;;
+        *)                              warn "Clock" "$TS_LAST" ;;
+    esac
+fi
+
+# 7. no failed units (our own excluded)
+NFAILED=$(systemctl --failed --no-legend 2>/dev/null | grep -cv 'ombra-systemcheck' || true)
+if [ "$NFAILED" = "0" ]; then
+    pass "Units" "no failed systemd units"
+else
+    fail "Units" "failed units present:"
+    systemctl --failed --no-legend 2>/dev/null | grep -v 'ombra-systemcheck' | head -3 | sed 's/^/         /'
+fi
+
+# 8. listeners must match the design whitelist (no sshd ships; IPv6 is
+#    off, so any v6-family bind is itself unexpected)
+BAD=$(ss -ltnu 2>/dev/null | awk 'NR>1 {print $1, $5}' | grep -vE \
+  '^(tcp 10\.55\.10\.1:53|udp 10\.55\.10\.1:53|udp [0-9.]+%ombra-upstream:68|tcp 10\.55\.10\.1:9050|tcp 10\.55\.10\.1:9040|tcp 10\.55\.10\.1:9052|tcp 127\.0\.0\.1:9050|tcp 127\.0\.0\.1:9051|udp 127\.0\.0\.1:5353)$' || true)
+if [ -z "$BAD" ]; then
+    pass "Listeners" "match the design whitelist"
+else
+    fail "Listeners" "unexpected socket(s):"
+    printf '%s\n' "$BAD" | head -3 | sed 's/^/         /'
+fi
+
+# 9. the control-port side door is shut: ombra carries no debian-tor
+#    membership and no group-writable control socket exists (Debian's
+#    tor defaults arm one; torrc pins both off — this catches drift)
+if [ "$ROOTED" -ne 1 ]; then
+    skip "Control socket" "requires root - run: sudo ombra-systemcheck"
+else
+    side=0
+    if awk -F: '$1 == "debian-tor" { n = split($4, m, ","); for (i = 1; i <= n; i++) if (m[i] == "ombra") found = 1 } END { exit found ? 0 : 1 }' /etc/group 2>/dev/null; then
+        fail "Control socket" "ombra is in the debian-tor group - one chmod from the raw port"
+        side=1
+    fi
+    for sock in /run/tor/control /var/run/tor/control; do
+        [ -S "$sock" ] || continue
+        if [ -n "$(find "$sock" -perm -g+w 2>/dev/null)" ]; then
+            fail "Control socket" "$sock is group-writable"
+            side=1
+        fi
+    done
+    [ "$side" -eq 1 ] || pass "Control socket" "no group path to the control port"
+fi
+
+# 10. amnesia by construction: root is a RAM overlay over a read-only lower
+ROOTFS=$(findmnt -no FSTYPE / 2>/dev/null)
+if [ "$ROOTFS" = "overlay" ]; then
+    pass "Amnesia" "root is an overlay (RAM upper, writes die at power-off)"
+elif grep -qw 'overlayroot=disabled' /proc/cmdline 2>/dev/null; then
+    pass "Amnesia" "Persistent boot mode chosen at the menu (Tor state stays on disk)"
+else
+    fail "Amnesia" "root is '${ROOTFS:-unknown}', not an overlay - session writes would persist"
+fi
+
+# ----------------------------------------------------------------- summary
+if [ "$SUMMARY" -eq 1 ]; then
+    printf 'FAILED=%s\n' "$FAILS"
+    printf 'SKIPPED=%s\n' "$SKIPS"
+else
+    if [ "$FAILS" -eq 0 ]; then
+        if [ "$SKIPS" -gt 0 ]; then
+            printf '\n%bALL RUN CHECKS PASSED%b\n   %d check(s) skipped - run with sudo for the full report\n' \
+                "$C_GREEN" "$C_OFF" "$SKIPS"
+        else
+            printf '\n%bALL CHECKS PASSED%b\n   run `sudo ombra-systemcheck` anytime\n' \
+                "$C_GREEN" "$C_OFF"
+        fi
+    else
+        printf '\n%b%d CHECK(S) FAILED%b\n' \
+            "$C_RED" "$FAILS" "$C_OFF"
+    fi
+fi
+[ "$FAILS" -gt 125 ] && FAILS=125
+exit "$FAILS"

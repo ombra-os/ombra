@@ -1,0 +1,47 @@
+// Ombra system panel: the ring art, the "ombra" wordmark, and the Tor
+// verdict. No networked modules except the statusd line (same three
+// probes as core/src/status.rs — nothing new calls out; fastfetch
+// itself never fetches anything).
+{
+    "$schema": "https://raw.githubusercontent.com/fastfetch-cli/fastfetch/2.40.4/doc/json_schema.json",
+    "general": {
+        "processingTimeout": 1500
+    },
+    "logo": {
+        "type": "file-raw",
+        "source": "~/.config/fastfetch/ring.ans",
+        "padding": {
+            "top": 1,
+            "left": 2,
+            "right": 4
+        }
+    },
+    "display": {
+        "color": {
+            "title": "38;2;195;155;255",
+            "keys": "38;2;143;155;255",
+            "separator": "38;2;92;96;112"
+        }
+    },
+    "modules": [
+        { "type": "title", "format": "ombra" },
+        { "type": "separator", "string": "─", "length": 22, "outputColor": "38;2;143;155;255" },
+        "os",
+        "host",
+        "kernel",
+        "uptime",
+        "de",
+        "wm",
+        "terminal",
+        "theme",
+        "icons",
+        "font",
+        {
+            "type": "command",
+            "key": "tor",
+            // the daemon's persisted verdict (--once + FORCE_CACHE);
+            // colors match the status dot
+            "text": "line=$(/usr/bin/timeout 1 /usr/bin/env OMBRA_STATUS_FORCE_CACHE=1 /usr/local/bin/ombra-statusd --once 2>/dev/null); case $line in *'\"state\":\"ok\"'*) printf '\\033[38;5;78mall traffic routes through tor\\033[0m' ;; *'\"state\":\"semi\"'*) printf '\\033[38;5;221mgateway reachable, tor path degraded\\033[0m' ;; *'\"state\":\"fail\"'*) printf '\\033[38;5;210mconnectivity check failed\\033[0m' ;; *) printf 'unknown' ;; esac"
+        }
+    ]
+}

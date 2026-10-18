@@ -1,0 +1,27 @@
+[Desktop Entry]
+Name=Ombra-dark
+Comment=Ombra dark plasma style
+
+X-KDE-PluginInfo-Author=Ombra
+X-KDE-PluginInfo-Name=Colloid-dark
+X-KDE-PluginInfo-Version=5.84.0
+X-KDE-PluginInfo-Website=https://github.com/ombra-os/ombra
+X-KDE-PluginInfo-Category=
+X-KDE-PluginInfo-License=LGPL
+X-KDE-PluginInfo-EnabledByDefault=true
+X-Plasma-API=5.0
+
+[Wallpaper]
+defaultWallpaperTheme=Colloid-dark
+defaultFileSuffix=.png
+defaultWidth=3840
+defaultHeight=2160
+
+[ContrastEffect]
+enabled=true
+contrast=0.25
+intensity=1.3
+saturation=1.4
+
+[AdaptiveTransparency]
+enabled=true

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Ombra Tor Status LED
+Exec=/usr/local/bin/ombra-led-ensure
+Terminal=false
+NoDisplay=true
+X-KDE-StartupNotify=false

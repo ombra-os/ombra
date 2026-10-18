@@ -1,0 +1,25 @@
+[Unit]
+# Tor-only clock keeper; if tor is still bootstrapping the fetches fail
+# fast and the next timer run lands once SOCKS is up.
+Description=Ombra gateway time sync (Date headers fetched over Tor)
+After=tor@default.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ombra-timesync
+TimeoutStartSec=150
+# exactly one privilege: setting the clock (@clock stays allowed)
+CapabilityBoundingSet=CAP_SYS_TIME
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=~@mount @swap @module @raw-io @reboot @debug

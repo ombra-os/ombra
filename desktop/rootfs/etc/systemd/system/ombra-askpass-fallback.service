@@ -1,0 +1,18 @@
+# never-lock-out net: runs the stock tty ask-password agent only while the branded agent's marker (/run/ombra/askpass-live) is absent.
+
+[Unit]
+Description=stock tty ask-password fallback (never-lock-out)
+After=systemd-vconsole-setup.service ombra-welcome.service ombra-askpass.service
+
+[Service]
+Type=simple
+TTYPath=/dev/tty1
+StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+ExecStart=/usr/local/sbin/ombra-askpass-fallback
+Restart=on-failure
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

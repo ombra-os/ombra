@@ -1,0 +1,30 @@
+[Unit]
+Description=Ombra desktop time sync (Date headers over Tor via the gateway)
+# NetworkManager owns the link; the SOCKS fetch retries cheaply.
+After=NetworkManager.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ombra-timesync
+TimeoutStartSec=180
+CapabilityBoundingSet=CAP_SYS_TIME
+AmbientCapabilities=CAP_SYS_TIME
+NoNewPrivileges=yes
+ProtectSystem=strict
+RuntimeDirectory=ombra
+RuntimeDirectoryPreserve=yes
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=~@mount @swap @module @raw-io @reboot @debug
+
+[Install]
+WantedBy=multi-user.target

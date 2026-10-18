@@ -1,0 +1,195 @@
+#!/bin/sh
+#
+#
+# ombra-splash — the gateway console's boot face: ring, verdict, Tor
+# state, "ready". Detail stays behind `sudo ombra-systemcheck`.
+# Modes: --boot renders to /dev/tty1; bare renders to stdout (preview).
+# OMBRA_SPLASH_GEOM="rows cols" overrides the stty size probe.
+# Engine: ombra-systemcheck --boot --summary (FAILED=N / SKIPPED=N).
+
+set -u
+
+CHECK=/usr/local/sbin/ombra-systemcheck
+TTY=/dev/tty1
+
+# ---- palette (forced on; ASCII-only art) ----
+RING='\033[1;38;5;189m'
+EDGE='\033[38;5;103m'
+BRAND='\033[1;38;5;255m'
+LABEL='\033[38;5;245m'
+GOOD='\033[1;38;5;78m'
+BAD='\033[1;38;5;210m'
+TEXT='\033[38;5;255m'
+RULE='\033[37m'
+OFF='\033[0m'
+
+uptime_hm() {
+    cut -d. -f1 /proc/uptime | awk '{printf "%dm %02ds", $1/60, $1%60}'
+}
+
+# ---- console geometry ------------------------------------------------------
+# $1 = tty device. Emits "rows cols"; falls back to the headless default.
+geom() {
+    if [ -n "${OMBRA_SPLASH_GEOM:-}" ]; then
+        echo "$OMBRA_SPLASH_GEOM"; return
+    fi
+    stty size <"$1" 2>/dev/null || echo "50 160"
+}
+
+# ---- the ring (official art, verbatim) ------------------------------------
+# Two-tone at render time: '@' = body, everything else non-blank = edge.
+RING_ART='                .==========:
+           :*#@@@@@@@@@@@@@@@@#*:
+         %%@@@@@@@@@@@@@@@@@@@@@@@%
+      .%@@@@@@%%-          -%%@@=   ..
+    .#@@@@@%=.                   :%@@@*.
+   -%@@@@%-                   :-=%@@@@@#:
+  -@@@@@*                  .+     :@@@@@@-
+ :@@@@@.                 %          @@@@@@:
+.@@@@@+              .+:            .#@@@@@.
+.@@@@@:            =-                :@@@@@.
+%@@@@*.         + :                   -@@@@@
+@@@@@=       =-.                      -@@@@@
+%@@@@@:   :+                          -@@@@@
+.@@@@@=--=                           :@@@@@.
+.@@@@*=.                             +@@@@@.
+ :#:. +:                            .@@@@@:
+   :#@@@@                          @@@@@@-
+   -%@@@@%-                      :%@@@@%-
+    -#@@#=                    :*@@@@@@#-
+      :   .#@@@#**        +*#@@@@@@@%:
+         -@@@@@@@@@@@@@@@@@@@@@@@@%.
+            -%@@@@@@@@@@@@@@@@%-
+                 -********='
+
+# ---------------------------------------------------------------- render --
+# $1 FAILED, $2 UPTIME, $3 rows, $4 cols. Every line ends CRLF: on a
+# raw-mode tty a bare LF staircases; on a cooked tty CR is a no-op.
+emit() { render "$@" | sed 's/$/\r/'; }
+render() {
+    _failed=$1; _up=$2; _rows=$3; _cols=$4
+    if [ "$_failed" = "0" ]; then
+        _verdict="${GOOD}ALL SYSTEMS NOMINAL${OFF}"
+        # exit IP deliberately NOT shown
+        _torline="${GOOD}connected${OFF}"
+    else
+        _verdict="${BAD}ATTENTION - ${_failed} CHECK$([ "$_failed" -gt 1 ] && echo S) FAILED${OFF}"
+        _torline="${LABEL}detail below${OFF}"
+    fi
+    awk -v RING="$RING" -v EDGE="$EDGE" -v OFF="$OFF" -v BRAND="$BRAND" \
+        -v LABEL="$LABEL" -v TEXT="$TEXT" -v RULE="$RULE" -v GOOD="$GOOD" \
+        -v verdict="$_verdict" \
+        -v torline="$_torline" -v up="$_up" -v failed="$_failed" \
+        -v conrows="$_rows" -v concols="$_cols" '
+    {
+        raw = $0
+        out = ""
+        n = length(raw)
+        if (n > artw) artw = n
+        for (i = 1; i <= n; i++) {
+            c = substr(raw, i, 1)
+            if (c == "@")        out = out RING c OFF
+            else if (c == " ")   out = out c
+            else                 out = out EDGE c OFF
+        }
+        art[++rows] = out
+    }
+    function spacer(k,   s) { s = ""; while (k-- > 0) s = s " "; return s }
+    END {
+        panel[1] = sprintf("%sO M B R A   G A T E W A Y%s", BRAND, OFF)
+        panel[2] = sprintf("%s----------------------------------%s", RULE, OFF)
+        panel[3] = ""
+        panel[4] = sprintf("%sstatus%s   %s", LABEL, OFF, verdict)
+        panel[5] = sprintf("%stor%s      %s", LABEL, OFF, torline)
+        panel[6] = sprintf("%suptime%s   %s%s%s", LABEL, OFF, BRAND, up, OFF)
+        panel[7] = sprintf("%smode%s     %slive - session resets at boot%s", LABEL, OFF, TEXT, OFF)
+        panel[8] = ""
+        panel[9] = sprintf("%sready - all traffic routes through tor%s", GOOD, OFF)
+        np = 9
+        compact[1] = panel[1]
+        compact[2] = panel[2]
+        compact[3] = panel[4]
+        compact[4] = panel[5]
+        compact[5] = panel[9]
+        nc = 5
+
+        panelw = 42
+        # side: 23 art + rule block + prompt margin fits from 30 rows.
+        # stacked: 23 art + gap + 9 panel + rule block (+ fail detail)
+        # = 37 lines — demand headroom, else the compact card.
+        side = (concols >= artw + 3 + panelw && conrows >= 30) ? 1 : 0
+        stacked = (!side && concols >= artw + 2 && conrows >= 38) ? 1 : 0
+
+        if (side)      width = artw + 3 + panelw
+        else if (stacked) width = (artw > panelw ? artw : panelw)
+        else           width = panelw
+
+        height = side ? rows : (stacked ? rows + 1 + np : nc)
+        height += 4                        # rule + blanks around it
+        top = int((conrows - height) / 2)
+        if (top < 0) top = 0
+        if (top > 6) top = 6
+
+        for (i = 0; i < top; i++) print ""
+        if (side) {
+            start = int((rows - np) / 2) + 1
+            for (r = 1; r <= rows; r++) {
+                if (r >= start && r - start < np)
+                    printf "%s   %s\n", art[r], panel[r - start + 1]
+                else
+                    printf "%s\n", art[r]
+            }
+        } else if (stacked) {
+            pad = spacer(int((concols - artw) / 2)); if (pad == "") pad = " "
+            for (r = 1; r <= rows; r++) printf "%s%s\n", pad, art[r]
+            print ""
+            ppad = spacer(int((concols - panelw) / 2)); if (ppad == "") ppad = " "
+            for (p = 1; p <= np; p++) printf "%s%s\n", ppad, panel[p]
+        } else {
+            pad = spacer(int((concols - panelw) / 2)); if (pad == "") pad = " "
+            for (p = 1; p <= nc; p++) printf "%s%s\n", pad, compact[p]
+        }
+
+        print ""
+        printf "%s", spacer(3)
+        printf "%s", RULE
+        for (i = 0; i < width && i < concols - 4; i++) printf "-"
+        printf "%s\n", OFF
+        print ""
+        if (failed != "0")
+            printf "   %srun  sudo ombra-systemcheck  for detail%s\n", TEXT, OFF
+    }' <<EOF
+$RING_ART
+EOF
+}
+
+# ------------------------------------------------------------------ boot --
+if [ "${1:-}" = "--boot" ]; then
+    set -- $(geom "$TTY"); ROWS_=${1:-50}; COLS_=${2:-160}
+    if [ -w "$TTY" ]; then
+        # cooked console before we paint (a raw leftover staircases us)
+        stty sane -F "$TTY" 2>/dev/null || stty sane <"$TTY" 2>/dev/null
+        exec >>"$TTY" 2>&1
+        printf '\033[?25l\033[H\033[2J'
+        printf '   ombra gateway - starting checks, waiting for Tor...\r\n'
+    fi
+    OUT=$("$CHECK" --boot --summary 2>/dev/null)
+    RC=$?
+    FAILED=$(printf '%s\n' "$OUT" | sed -n 's/^FAILED=//p')
+    [ -z "$FAILED" ] && FAILED=125
+    printf '\033[H\033[2J'
+    emit "$FAILED" "$(uptime_hm)" "$ROWS_" "$COLS_"
+    # cooked console for the login shell that lands here next
+    stty sane -F "$TTY" 2>/dev/null || stty sane <"$TTY" 2>/dev/null
+    printf '\033[?25h'
+    exit 0
+fi
+
+# preview mode (stdout)
+set -- $(geom /dev/tty); ROWS_=${1:-50}; COLS_=${2:-160}
+OUT=$("$CHECK" --summary 2>/dev/null)
+RC=$?
+FAILED=$(printf '%s\n' "$OUT" | sed -n 's/^FAILED=//p')
+[ -z "$FAILED" ] && FAILED=125
+emit "$FAILED" "$(uptime_hm)" "$ROWS_" "$COLS_"
+exit "$RC"

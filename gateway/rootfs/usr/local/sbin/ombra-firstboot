@@ -1,0 +1,17 @@
+#!/bin/sh
+#
+# ombra-firstboot — one-shot guest bring-up (stamp-guarded).
+
+set -eu
+
+STAMP=/var/lib/ombra/firstboot-done
+
+if [ -e "$STAMP" ]; then
+    echo "ombra-firstboot: already ran, nothing to do"
+    exit 0
+fi
+
+install -d -m 0755 /var/lib/ombra
+printf 'ran at %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STAMP"
+
+echo "ombra-firstboot: ok"

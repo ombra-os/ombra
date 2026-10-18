@@ -1,0 +1,14 @@
+{
+    "KPackageStructure": "Plasma/Wallpaper",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Ombra"
+            }
+        ],
+        "Id": "Colloid-dark",
+        "License": "GPL-3.0-or-later",
+        "Name": "Ombra"
+    },
+    "X-KDE-PlasmaImageWallpaper-AccentColor": "#ce55cf"
+}

@@ -1,0 +1,4 @@
+# vendored phinger cursors — the light (white) variant for the dark desktop
+[Mouse]
+cursorTheme=phinger-cursors-light
+cursorSize=24

@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+base="$GRUB_CMDLINE_LINUX_DEFAULT"
+GRUB_DISABLE_RECOVERY=true GRUB_DISABLE_SUBMENU=y sh /etc/grub.d/10_linux | awk '/^menuentry /{exit} {print}'
+entry() {
+    GRUB_CMDLINE_LINUX_DEFAULT="$base${3:+ $3}" GRUB_DISABLE_RECOVERY=true GRUB_DISABLE_SUBMENU=y \
+        sh /etc/grub.d/10_linux \
+        | awk '/^menuentry /&&!d{n=1} n==1{print} n==1&&/^}/{n=0;d=1}' \
+        | sed -e "1s/^menuentry '[^']*'/menuentry '$1'/" \
+              -e "1s/[\$]menuentry_id_option '[^']*'/\$menuentry_id_option '$2'/"
+}
+entry 'Ombra — Persistent' ombra-persistent ''
+entry 'Ombra — Amnesic (RAM only, forgets everything at shutdown)' ombra-amnesic overlayroot=tmpfs

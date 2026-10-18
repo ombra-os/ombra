@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=KDE Connect
+Hidden=true
+# belt: kdeconnect is banned; this kills its XDG autostart if it ever
+# arrives (the late command also masks the unit)
+Exec=/usr/lib/aarch64-linux-gnu/libexec/kdeconnectd
+NoDisplay=true

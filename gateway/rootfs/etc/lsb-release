@@ -1,0 +1,8 @@
+# LSB compat (lsb_release reads this file first, then os-release).
+# RELEASE stays: the LSB spec requires it and machine-facing tooling
+# (facter/ansible-class facts) parses it; it mirrors VERSION_ID in
+# usr/lib/os-release and is never a human surface.
+DISTRIB_ID="Ombra"
+DISTRIB_RELEASE="1.0"
+DISTRIB_CODENAME=trixie
+DISTRIB_DESCRIPTION="Ombra"

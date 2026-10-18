@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Discover
+Hidden=true
+# belt: plasma-desktop RECOMMENDS plasma-discover — this keeps its
+# autostart dead even then (the late command also purges it)
+Exec=plasma-discover --mode update
+X-DBUS-StartupType=Unique
+NoDisplay=true

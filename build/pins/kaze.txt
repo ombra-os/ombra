@@ -1,0 +1,6 @@
+# Kaze icon theme (GPL-3.0) — pinned upstream commit.
+# Source: github.com/2O48/Kaze (no releases/tags exist upstream)
+# Only the Kaze-dark variant ships; see ombra-assets README.
+commit=ab77c4d1cbfbb1fc9de1a125a3f9ed74c2513cd3
+tarball_sha256=4a0c92682cef5e7299abe00474db69bf6503925050e2f26067646abd0393aa2a
+license=GPL-3.0

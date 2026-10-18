@@ -1,0 +1,80 @@
+#!/bin/sh
+#
+# ombra-timesync — keep the desktop clock sane using nothing but Tor:
+# Date headers of HTTPS responses fetched through the gateway's SOCKS
+# port. Integrity rule: a majority of the URL pool must agree within
+# AGREE seconds; only step beyond STEP seconds. Any disagreement or
+# failure logs and exits 0 — failing safe means changing nothing.
+
+set -u
+
+STEP=90      # seconds: only step the clock beyond this offset
+AGREE=30     # sources must agree pairwise within this to be trusted
+TIMEOUT=25   # per-source curl timeout (Tor fetches can be slow)
+# independent operators; an attack needs a majority to collude AND
+# defeat TLS through Tor
+URLS="https://check.torproject.org https://www.debian.org https://archive.org"
+
+log() { echo "ombra-timesync: $*"; }
+
+# STATE CONTRACT (read by ombra-statusd): first line of
+# /run/ombra/timesync is "ok" or "stale"; probe failure writes NOTHING
+# (an unreachable network says nothing about the clock).
+state() { mkdir -p /run/ombra; printf '%s\n' "$1" > /run/ombra/timesync; }
+
+command -v curl >/dev/null 2>&1 || { log "FATAL: curl missing"; exit 1; }
+
+dates=""
+for url in $URLS; do
+    d=$(curl -sI --max-time "$TIMEOUT" --socks5-hostname 10.55.10.1:9050 "$url" \
+        | tr -d '\r' | awk 'tolower($1)=="date:" { $1=""; sub(/^ /,""); print; exit }')
+    if [ -n "$d" ]; then
+        t=$(date -u -d "$d" +%s 2>/dev/null) || t=""
+        [ -n "$t" ] && dates="$dates $t"
+    fi
+done
+
+n=$(echo $dates | wc -w)
+if [ "$n" -lt 2 ]; then
+    log "fewer than 2 sources answered ($n) — leaving the clock alone"
+    exit 0
+fi
+
+# largest clique within AGREE wins (3 sources: at least 2 must agree)
+best_t=0; best_c=0
+for t in $dates; do
+    c=0
+    for u in $dates; do
+        d=$((u - t)); [ "$d" -lt 0 ] && d=$((-d))
+        [ "$d" -le "$AGREE" ] && c=$((c + 1))
+    done
+    if [ "$c" -gt "$best_c" ]; then best_c=$c; best_t=$t; fi
+done
+
+if [ "$best_c" -lt 2 ]; then
+    log "sources disagree (got:$dates) — leaving the clock alone"
+    state stale
+    exit 0
+fi
+if [ "$best_c" -ne "$n" ]; then
+    log "note: $((n - best_c)) outlier source(s) ignored (got:$dates)"
+fi
+
+now=$(date -u +%s)
+delta=$((best_t - now))
+[ "$delta" -lt 0 ] && mag=$((-delta)) || mag=$delta
+
+if [ "$mag" -le "$STEP" ]; then
+    log "offset ${mag}s within ${STEP}s tolerance — no step (consensus of $best_c/$n)"
+    state ok
+    exit 0
+fi
+
+if date -u -s "@$best_t" >/dev/null 2>&1 || date -u "$best_t" >/dev/null 2>&1; then
+    log "stepped clock by ${delta}s to consensus $(date -u +%FT%TZ) ($best_c/$n sources)"
+    state ok
+else
+    log "clock step FAILED (no permission?) — needs CAP_SYS_TIME"
+    state stale
+fi
+exit 0

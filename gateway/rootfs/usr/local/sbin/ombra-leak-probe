@@ -1,0 +1,323 @@
+#!/bin/sh
+# root-only leak probe: read-only on VM state, scratch under a private root-owned /run dir only, never reboots or reconfigures.
+# the host orchestrator cannot capture guest stdout: every line is mirrored to the report file.
+# probe bodies are validated and dropped: no exit IP is ever printed, written or kept.
+
+set -u
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+FAILS=0
+TOTAL=7
+LIVE_CONF=/etc/nftables.conf
+WORK=/run/ombra-leak-work
+OUT=/run/ombra-leak
+REPORT=$OUT/report.txt
+
+umask 077
+rm -rf "$WORK" "$OUT"
+mkdir -m 0700 "$WORK" || exit 125
+mkdir -m 0755 "$OUT" || exit 125
+: >"$REPORT"
+chmod 0644 "$REPORT"
+
+fail() { FAILS=$((FAILS + 1)); }
+say() { printf '%s\n' "$*"; printf '%s\n' "$*" >>"$REPORT"; }
+evid() { say "        $*"; }
+evid_head() { sed -E 's/^/        /' "$1" 2>/dev/null | head -"${2:-20}" | tee -a "$REPORT"; }
+
+bounded() { timeout "$@"; }
+
+# unprivileged egress test: drop privileges like a real attacker process
+as_user() {
+    su -s /bin/sh "$1" -c "$2"
+}
+
+# one UDP/53 query over bash's /dev/udp; prints the response rcode, or nothing when no reply arrived
+dns_rcode() {
+    out=$(timeout $(($3 + 3)) bash -c 'exec 3<>"/dev/udp/$0/$1" || exit 1
+        printf "\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03deb\x06debian\x03org\x00\x00\x01\x00\x01" >&3
+        timeout "$2" head -c 4 <&3 | od -An -tu1' "$1" "$2" "$3" 2>/dev/null)
+    set -- $out
+    [ $# -eq 4 ] && printf '%s' $(($4 & 15))
+}
+
+say '==== ombra gateway leak tests (root) ===='
+
+# [1/7] NON-TOR EGRESS FAILS: the only accept-to-internet is the debian-tor uid;
+# curl must die with "connection refused" (exit 7 — 28 means REJECT flipped to DROP, 0 means the firewall is off).
+say '[1/7] non-tor egress fails (ombra -> internet must be REFUSED, not timed out)'
+reject_before=$(nft list chain inet filter output | grep 'reject comment' | grep -oE 'packets [0-9]+' | grep -oE '[0-9]+' | head -1)
+
+as_user ombra 'curl --connect-timeout 8 -sS -o /dev/null https://check.torproject.org/' >/dev/null 2>&1
+rc1a=$?
+as_user ombra 'curl --connect-timeout 8 -sS -o /dev/null http://deb.debian.org/debian/' >/dev/null 2>&1
+rc1b=$?
+
+reject_after=$(nft list chain inet filter output | grep 'reject comment' | grep -oE 'packets [0-9]+' | grep -oE '[0-9]+' | head -1)
+
+t1_ok=1
+if [ "$rc1a" -ne 7 ]; then
+    say '      FAIL: https://check.torproject.org/ as ombra did not die with connection-refused'
+    evid "curl exit=$rc1a (want 7=refused; 28=timeout means DROP-not-REJECT; 0 means FIREWALL OFF)"
+    t1_ok=0
+fi
+if [ "$rc1b" -ne 7 ]; then
+    say '      FAIL: http://deb.debian.org (apt-style :80) as ombra did not die with connection-refused'
+    evid "curl exit=$rc1b (want 7)"
+    t1_ok=0
+fi
+if ! journalctl -u tor@default --no-pager 2>/dev/null | grep -q 'Bootstrapped 100% (done)'; then
+    say '      FAIL: tor@default journal shows no "Bootstrapped 100% (done)"'
+    evid 'tor must reach bootstrap 100% for the tor-egress accept rule to be proven load-bearing'
+    t1_ok=0
+fi
+if [ "$t1_ok" -eq 1 ]; then
+    say '      PASS: both non-tor curls refused (exit 7), tor bootstrapped 100%'
+    evid "https check.torproject.org: curl exit 7"
+    evid "http  deb.debian.org:80:      curl exit 7"
+    evid "output-chain reject counter: $reject_before -> $reject_after (climbs as the curls are rejected)"
+fi
+[ "$t1_ok" -eq 1 ] || fail
+
+# [2/7] SOCKS REACHES THE REAL TOR NETWORK: "IsTor":true and a public IP; the body and
+# the IP are validated in memory and dropped — only booleans reach the report.
+say '[2/7] SOCKS 127.0.0.1:9050 reaches check.torproject.org (IsTor confirmed)'
+SOCKS_JSON=$(bounded 60 curl -sS --max-time 55 --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/api/ip 2>/dev/null)
+rc2=$?
+EXIT_IP=$(printf '%s' "$SOCKS_JSON" | sed -n 's/.*"IP":"\([0-9][0-9.]*\)".*/\1/p')
+IS_TOR=0
+printf '%s' "$SOCKS_JSON" | grep -q '"IsTor":true' && IS_TOR=1
+unset SOCKS_JSON
+t2_ok=1
+if [ "$rc2" -ne 0 ]; then
+    say '      FAIL: curl through SOCKS 127.0.0.1:9050 failed'
+    evid "curl exit=$rc2"
+    t2_ok=0
+elif [ "$IS_TOR" -ne 1 ]; then
+    say '      FAIL: check.torproject.org did not confirm the connection as Tor'
+    t2_ok=0
+elif [ -z "$EXIT_IP" ]; then
+    say '      FAIL: no IP in the api/ip response'
+    t2_ok=0
+else
+    case "$EXIT_IP" in
+        10.*|127.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*)
+            say '      FAIL: exit address is private/loopback — not a real Tor exit'
+            t2_ok=0
+            ;;
+    esac
+fi
+unset EXIT_IP
+if [ "$t2_ok" -eq 1 ]; then
+    say '      PASS: check.torproject.org says IsTor:true (public exit address; value dropped)'
+fi
+[ "$t2_ok" -eq 1 ] || fail
+
+# [3/7] NON-TOR DNS FAILS: a direct query to a public resolver must die in the output
+# chain while Tor DNSPort (:5353) and the system resolver path both resolve.
+say '[3/7] non-tor DNS (public resolver 9.9.9.9) refused; Tor DNSPort + system resolver resolve'
+t3_ok=1
+if [ -n "$(dns_rcode 9.9.9.9 53 5)" ]; then
+    say '      FAIL: DNS query to public resolver 9.9.9.9 got an answer — cleartext DNS escape path!'
+    t3_ok=0
+fi
+if [ "$(dns_rcode 127.0.0.1 5353 25)" != "0" ]; then
+    say '      FAIL: Tor DNSPort (127.0.0.1:5353) did not resolve deb.debian.org'
+    t3_ok=0
+fi
+if ! getent hosts deb.debian.org >/dev/null 2>&1; then
+    say '      FAIL: getent hosts (nss -> resolv.conf) did not resolve'
+    t3_ok=0
+fi
+if [ "$t3_ok" -eq 1 ]; then
+    say '      PASS: 9.9.9.9 died in the output chain; Tor DNSPort and getent both resolve'
+fi
+[ "$t3_ok" -eq 1 ] || fail
+
+# [4/7] LIVE RULESET == THE SHIPPED FILE ON DISK: nft renders /etc/nftables.conf (the
+# live shipped baseline itself, in a throwaway netns) and the counter-stripped renders
+# are diffed — a semantic comparison with nothing pushed from the host.
+# Structural asserts: skuid matches debian-tor's uid, forward = drop + single reject,
+# desktop input port-scoped, stray-DNS redirect, NOTHING on :22 and no sshd ships.
+say '[4/7] live nftables ruleset matches the on-disk /etc/nftables.conf'
+t4_ok=1
+if [ ! -f "$LIVE_CONF" ]; then
+    say "      FAIL: $LIVE_CONF not found — the shipped ruleset file is missing"
+    t4_ok=0
+else
+    nft list ruleset >$WORK/leak4-live.nft 2>/dev/null
+    if ! unshare -n sh -c "nft -f '$LIVE_CONF' && nft list ruleset" >$WORK/leak4-file.nft 2>$WORK/leak4-file.err; then
+        say '      FAIL: could not render /etc/nftables.conf via nft in a throwaway netns'
+        evid "unshare/nft error: $(tr '\n' ' ' <$WORK/leak4-file.err | head -c 200)"
+        t4_ok=0
+    else
+        # strip runtime counters (the fresh netns render always reads 0/0) on BOTH sides
+        sed -E 's/counter packets [0-9]+ bytes [0-9]+/counter/g' $WORK/leak4-live.nft >$WORK/leak4-live.norm
+        sed -E 's/counter packets [0-9]+ bytes [0-9]+/counter/g' $WORK/leak4-file.nft >$WORK/leak4-file.norm
+        if ! diff -u $WORK/leak4-file.norm $WORK/leak4-live.norm >$WORK/leak4.diff; then
+            say '      FAIL: live ruleset differs from /etc/nftables.conf (semantic diff below)'
+            evid_head $WORK/leak4.diff 60
+            t4_ok=0
+        fi
+    fi
+fi
+TOR_UID=$(id -u debian-tor 2>/dev/null)
+if nft list ruleset | grep -q 'tcp dport 22.*accept'; then
+    say '      FAIL: an ssh accept rule exists in the live ruleset (no sshd ships; the port must be dead end to end)'
+    evid 'no ssh exception belongs in any ruleset'
+    t4_ok=0
+fi
+if ss -ltn 2>/dev/null | awk 'NR>1 {print $4}' | grep -qE '(^|:)22$'; then
+    say '      FAIL: something LISTENS on :22 (the shipped image has no sshd — this is drift)'
+    evid "listener: $(ss -ltn | grep -E '(^|:)22 ' | head -1)"
+    t4_ok=0
+fi
+if command -v sshd >/dev/null 2>&1 || dpkg -s openssh-server >/dev/null 2>&1 || [ -e /etc/ssh/sshd_config ]; then
+    say '      FAIL: sshd artifacts ship on the gateway (binary, package, or sshd_config)'
+    evid "sshd binary: $(command -v sshd || echo none); openssh-server: $(dpkg -s openssh-server >/dev/null 2>&1 && echo installed || echo absent); sshd_config: $([ -e /etc/ssh/sshd_config ] && echo present || echo absent)"
+    t4_ok=0
+fi
+if [ -z "$TOR_UID" ] || ! nft list ruleset | grep -q "meta skuid $TOR_UID oifname \"ombra-upstream\".*accept"; then
+    say '      FAIL: tor egress rule does not match debian-tor uid'
+    evid "debian-tor uid=$TOR_UID — live ruleset has no meta skuid $TOR_UID accept on ombra-upstream"
+    t4_ok=0
+fi
+fwd=$(nft list chain inet filter forward 2>/dev/null)
+fwd_rules=$(printf '%s\n' "$fwd" | grep -cE '^[[:space:]]+(counter|ip|tcp|udp|meta|ct|iifname|oifname)')
+if ! printf '%s\n' "$fwd" | grep -q 'policy drop' || \
+   [ "$fwd_rules" -ne 1 ] || \
+   ! printf '%s\n' "$fwd" | grep -q 'reject comment "forwarding prohibited'; then
+    say '      FAIL: forward chain is not "empty with final reject" (policy drop + exactly 1 forwarding-prohibited rule)'
+    evid "forward chain: $(printf '%s\n' "$fwd" | tr '\n' ' ' | head -c 220)"
+    t4_ok=0
+fi
+if nft list ruleset | grep -qE 'udp (sport|dport) 67' && \
+   nft list ruleset | grep -E 'udp (sport|dport) 67' | grep -q 'ombra-intnet'; then
+    say '      FAIL: a DHCP rule on ombra-intnet exists (the intnet carries no DHCP)'
+    t4_ok=0
+fi
+CTL_UID=$(id -u ombra-torctl 2>/dev/null)
+if [ -z "$CTL_UID" ] || nft list ruleset | grep -q "meta skuid $CTL_UID"; then
+    say '      FAIL: ombra-torctl is missing or has a ruleset match (it must have loopback only)'
+    t4_ok=0
+fi
+if nft list ruleset | grep -q 'iifname "ombra-intnet" ip saddr 10.55.10.0/24 counter accept'; then
+    say '      FAIL: broad intnet accept (whole /24, no port scope) found in live ruleset'
+    evid 'the desktop must reach ONLY dns/tor ports — not sshd or any future service'
+    t4_ok=0
+fi
+if ! nft list ruleset | grep -q 'iifname "ombra-intnet".*udp dport 53.*redirect to :53'; then
+    say '      FAIL: stray-DNS redirect (foreign UDP/53 -> dnsmasq) missing from live ruleset'
+    evid 'without it, a hardcoded-resolver app dies at the forward reject instead of resolving via Tor'
+    t4_ok=0
+fi
+if [ "$t4_ok" -eq 1 ]; then
+    say '      PASS: counter-normalized netns render of /etc/nftables.conf == live ruleset'
+    evid 'skuid=debian-tor only; forward = drop-policy + single reject; port-scoped intnet + DNS redirect present; no intnet DHCP, no ssh rule, no :22 listener, no sshd artifacts'
+fi
+[ "$t4_ok" -eq 1 ] || fail
+rm -f $WORK/leak4-live.nft $WORK/leak4-file.nft $WORK/leak4-live.norm $WORK/leak4-file.norm $WORK/leak4.diff $WORK/leak4-file.err
+
+# [5/7] NO UNEXPECTED LISTENERS: whitelist exactly the set the design admits
+# (dhclient on the upstream NIC — matched by interface).
+# No sshd: :22 is NOT whitelisted. IPv6 off: v6-family binds are NOT whitelisted.
+say '[5/7] listening sockets match the design whitelist (ss -ltnu)'
+t5_ok=1
+is_allowed() {
+    case "$1 $2" in
+        "tcp 10.55.10.1:53")               return 0 ;;  # dnsmasq DNS for the desktop
+        "udp 10.55.10.1:53")               return 0 ;;  # dnsmasq DNS for the desktop
+        "udp "*"%ombra-upstream:68")       return 0 ;;  # dhclient on the upstream NIC (any host subnet)
+        "tcp 10.55.10.1:9050")             return 0 ;;  # tor SocksPort (desktop)
+        "tcp 10.55.10.1:9040")             return 0 ;;  # tor TransPort (transparent proxy)
+        "tcp 10.55.10.1:9052")             return 0 ;;  # ombra-torctl-filter (read-only control)
+        "tcp 127.0.0.1:9050")              return 0 ;;  # tor SocksPort (local harness)
+        "tcp 127.0.0.1:9051")              return 0 ;;  # tor ControlPort (loopback; the filter's upstream)
+        "udp 127.0.0.1:5353")              return 0 ;;  # tor DNSPort (dnsmasq upstream)
+        *)                                 return 1 ;;
+    esac
+}
+ACTUAL=$(ss -ltnu | awk 'NR>1 {print $1, $5}')
+: >$WORK/leak5.unexpected
+printf '%s\n' "$ACTUAL" | while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    set -- $line
+    is_allowed "$1" "$2" || printf 'UNEXPECTED %s %s\n' "$1" "$2" >>$WORK/leak5.unexpected
+done
+if [ -s $WORK/leak5.unexpected ]; then
+    say '      FAIL: unexpected listening socket(s)'
+    t5_ok=0
+    evid 'UNEXPECTED:'
+    evid_head $WORK/leak5.unexpected 10
+fi
+if [ "$t5_ok" -eq 1 ]; then
+    say '      PASS: all listening sockets are on the whitelist'
+fi
+evid "sockets seen: $(printf '%s' "$ACTUAL" | tr '\n' '; ')"
+[ "$t5_ok" -eq 1 ] || fail
+rm -f $WORK/leak5.unexpected
+
+# [6/7] IPv6 ABSENT: ipv6.disable=1 removes the stack; the sysctl pins are the fallback layer.
+say '[6/7] IPv6 stack absent (ipv6.disable=1) or disable_ipv6=1 on all + every interface'
+t6_ok=1
+GLOBAL6=$(ip -o -6 addr show scope global 2>/dev/null)
+if [ -n "$GLOBAL6" ]; then
+    say '      FAIL: global-scope IPv6 address present'
+    t6_ok=0
+fi
+if [ -d /proc/sys/net/ipv6 ]; then
+    if ! grep -qw 'ipv6.disable=1' /proc/cmdline; then
+        say '      FAIL: kernel cmdline lacks ipv6.disable=1'
+        t6_ok=0
+    fi
+    V6SYSCTL=$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null)
+    if [ "$V6SYSCTL" != "1" ]; then
+        say "      FAIL: net.ipv6.conf.all.disable_ipv6 = $V6SYSCTL (want 1)"
+        t6_ok=0
+    fi
+    V6_UNPINNED=$(for f in /proc/sys/net/ipv6/conf/*/disable_ipv6; do
+        [ "$(cat "$f" 2>/dev/null)" = "1" ] || printf '%s=%s ' "$f" "$(cat "$f" 2>/dev/null)"
+    done)
+    if [ -n "$V6_UNPINNED" ]; then
+        say '      FAIL: an interface still has disable_ipv6=0'
+        evid "unpinned: $V6_UNPINNED"
+        t6_ok=0
+    fi
+fi
+if [ "$t6_ok" -eq 1 ]; then
+    say '      PASS: no global v6 address; the v6 stack is absent or disabled on every interface'
+fi
+[ "$t6_ok" -eq 1 ] || fail
+
+# [7/7] CONTROL-PORT FILTER IS ISOLATED: it runs as ombra-torctl (not debian-tor, not root),
+# that uid gets no upstream egress, and the raw Tor cookie is unreadable to ombra.
+say '[7/7] ombra-torctl-filter runs as ombra-torctl; no egress for it; cookie closed to ombra'
+t7_ok=1
+FPID=$(systemctl show -p MainPID --value ombra-torctl-filter.service 2>/dev/null)
+FUSER=''
+[ -n "$FPID" ] && [ "$FPID" != 0 ] && FUSER=$(ps -o user= -p "$FPID" 2>/dev/null | tr -d ' ')
+if [ "$FUSER" != "ombra-torctl" ]; then
+    say '      FAIL: ombra-torctl-filter is not running as ombra-torctl'
+    evid "running as: ${FUSER:-not running}"
+    t7_ok=0
+fi
+as_user ombra-torctl 'curl --connect-timeout 8 -sS -o /dev/null https://check.torproject.org/' >/dev/null 2>&1
+rc7=$?
+if [ "$rc7" -ne 7 ]; then
+    say '      FAIL: ombra-torctl egress was not refused (curl exit not 7)'
+    evid "curl exit=$rc7"
+    t7_ok=0
+fi
+if as_user ombra 'test -r /run/tor/control.authcookie'; then
+    say '      FAIL: the Tor control cookie is readable by ombra'
+    t7_ok=0
+fi
+if [ "$t7_ok" -eq 1 ]; then
+    say '      PASS: filter uid isolated; its egress refused (exit 7); cookie closed to ombra'
+fi
+[ "$t7_ok" -eq 1 ] || fail
+rm -rf "$WORK/leak"*
+
+say "SUMMARY: passed=$((TOTAL - FAILS))/$TOTAL fail=$FAILS"
+exit "$FAILS"

@@ -1,0 +1,8 @@
+Deliberately empty, and it must stay empty: /etc/motd is a STATIC
+overlay file (the Ombra wordmark + the tor line, nothing else).
+Debian regenerates a dynamic motd by executing every executable file
+in this directory at login (base-files ships 10-uname); the install
+late command removes those scripts, and dpkg never restores deleted
+conffiles, so this directory stays script-free for the life of the
+machine. This README is non-executable on purpose: run-parts ignores
+it, nothing here ever runs.
