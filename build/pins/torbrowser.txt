@@ -8,3 +8,4 @@ manifest_signer_keyid=022DA248432D2A0E0F54E65E316C1FACD62D07D9
 manifest_signer=Tor Browser Developers (signing key) <torbrowser@torproject.org>
 # manifest/signer lines are the upstream provenance record; the enforced anchor is the sha256 above
 url=https://dist.torproject.org/torbrowser/16.0a13/
+archive_url=https://archive.torproject.org/tor-package-archive/torbrowser/16.0a13/

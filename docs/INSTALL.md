@@ -113,13 +113,14 @@ cd ..
 The desktop ISO carries the sha256-pinned Tor Browser tarball (alpha
 channel, the only one with linux-aarch64 builds); it is verified again
 inside the installer. Fetch the exact file named in
-`build/pins/torbrowser.txt` from the URL in that pin and place it in
-`build/vendor/` (the directory is gitignored):
+`build/pins/torbrowser.txt` and place it in `build/vendor/` (the
+directory is gitignored). Superseded alpha builds move to Tor's archive,
+so use the pin's `archive_url`:
 
 ```sh
 mkdir -p build/vendor
 curl -L -o build/vendor/tor-browser-linux-aarch64-16.0a13.tar.xz \
-  https://dist.torproject.org/torbrowser/16.0a13/tor-browser-linux-aarch64-16.0a13.tar.xz
+  https://archive.torproject.org/tor-package-archive/torbrowser/16.0a13/tor-browser-linux-aarch64-16.0a13.tar.xz
 shasum -a 256 build/vendor/tor-browser-linux-aarch64-16.0a13.tar.xz
 ```
 

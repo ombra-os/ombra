@@ -142,19 +142,27 @@ fetch_pins() {
     ok "Debian installer already verified"
   else
     say "  downloading $filename"
-    curl -fL --retry 3 -o "build/isos/$filename" \
-      "https://cdimage.debian.org/cdimage/archive/${version}/arm64/iso-cd/${filename}"
+    local base
+    for base in "https://cdimage.debian.org/debian-cd/current/arm64/iso-cd" \
+                "https://cdimage.debian.org/cdimage/archive/${version}/arm64/iso-cd"; do
+      curl -fL --retry 3 -o "build/isos/$filename" "$base/$filename" && break
+    done
+    [ -s "build/isos/$filename" ] || die "could not download $filename from Debian"
     bash build/verify-iso.sh >/dev/null || die "the Debian installer failed its checksum"
     ok "Debian installer verified"
   fi
   url="$(pin build/pins/torbrowser.txt url)"
+  archive="$(pin build/pins/torbrowser.txt archive_url)"
   file="$(pin build/pins/torbrowser.txt file)"
   want="$(pin build/pins/torbrowser.txt sha256)"
   if [ -f "build/vendor/$file" ] && [ "$(shasum -a 256 "build/vendor/$file" | awk '{print $1}')" = "$want" ]; then
     ok "Tor Browser already verified"
   else
     say "  downloading $file"
-    curl -fL --retry 3 -o "build/vendor/$file" "${url}${file}"
+    local tbase
+    for tbase in "$url" "$archive"; do
+      curl -fL --retry 3 -o "build/vendor/$file" "${tbase}${file}" && break
+    done
     [ "$(shasum -a 256 "build/vendor/$file" | awk '{print $1}')" = "$want" ] || die "Tor Browser failed its checksum"
     ok "Tor Browser verified"
   fi

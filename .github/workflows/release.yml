@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -47,8 +48,10 @@ jobs:
           filename="$(awk -F= '$1=="filename"{print $2}' build/pins/debian-netinst-arm64.txt)"
           version="$(printf '%s' "$filename" | sed -E 's/^debian-([0-9.]+)-arm64-netinst.iso$/\1/')"
           mkdir -p build/isos
-          curl -fL --retry 3 -o "build/isos/${filename}" \
-            "https://cdimage.debian.org/cdimage/archive/${version}/arm64/iso-cd/${filename}"
+          for base in "https://cdimage.debian.org/debian-cd/current/arm64/iso-cd" \
+                      "https://cdimage.debian.org/cdimage/archive/${version}/arm64/iso-cd"; do
+            curl -fL --retry 3 -o "build/isos/${filename}" "${base}/${filename}" && break
+          done
           test -s "build/isos/${filename}"
 
       - name: Verify the netinst against its pin
@@ -57,10 +60,13 @@ jobs:
       - name: Fetch the pinned Tor Browser payload
         run: |
           url="$(awk -F= '$1=="url"{print $2}' build/pins/torbrowser.txt)"
+          archive="$(awk -F= '$1=="archive_url"{print $2}' build/pins/torbrowser.txt)"
           file="$(awk -F= '$1=="file"{print $2}' build/pins/torbrowser.txt)"
           want="$(awk -F= '$1=="sha256"{print $2}' build/pins/torbrowser.txt)"
           mkdir -p build/vendor
-          curl -fL --retry 3 -o "build/vendor/${file}" "${url}${file}"
+          for base in "${url}" "${archive}"; do
+            curl -fL --retry 3 -o "build/vendor/${file}" "${base}${file}" && break
+          done
           printf '%s  %s\n' "$want" "build/vendor/${file}" | shasum -a 256 -c -
 
       - name: Cross-build the binaries
