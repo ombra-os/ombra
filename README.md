@@ -85,14 +85,19 @@ Details: [docs/INSTALL.md](docs/INSTALL.md)
 
 ## Compared
 
-| | Ombra | Whonix | Tails |
-|---|---|---|---|
-| Design | Gateway VM + desktop VM | Gateway VM + workstation VM | Single live OS |
-| Apple Silicon | Yes, native | Not officially supported | No |
-| Amnesic mode | Choice at every boot | Optional (live mode) | Always |
-| Persistent encrypted disk | Yes | Yes | Optional storage |
-| Runs on | VMware Fusion | VirtualBox, KVM, Qubes | Bare hardware |
-| Maturity | New, no independent audit | Established | Established |
+| | **Ombra** | Whonix | Tails |
+|---|:---|:---|:---|
+| 🧩 **Design** | **Gateway VM + desktop VM** | Gateway VM + workstation VM | Single live OS |
+| 🛡️ **Network path** | **One NIC on a private link; the only route is the gateway** | Workstation reaches the network only through the gateway | One OS; Tor enforced by firewall rules |
+| 🖥️ **Desktop** | **KDE Plasma, themed, mouse-first** | LXQt | GNOME |
+| 🐧 **Base** | **Debian 13 (trixie)** | Debian | Debian 13 (trixie) |
+| 🍎 **Apple Silicon** | ✅ **Yes, native arm64** | ⚠️ Not officially supported | ❌ No, x86-64 only |
+| 🧠 **Amnesic mode** | ✅ **Your choice at every boot** | ⚠️ Optional (live mode) | ✅ Always |
+| 🔐 **Disk encryption** | ✅ **LUKS2 on the desktop disk, inside the VM** | ❌ Not in its images; encrypt the host | ⚠️ Optional encrypted Persistent Storage |
+| 💻 **Runs on** | **VMware Fusion** | VirtualBox, KVM, Qubes | Bare hardware |
+| 📈 **Maturity** | **New, no independent audit** | Established | Established |
+
+✅ yes, ⚠️ partial, ❌ no. Modern means built for Apple Silicon and Debian 13 from the start; it also means new, with no independent audit yet.
 
 ## Status
 
