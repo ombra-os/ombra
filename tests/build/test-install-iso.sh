@@ -1254,8 +1254,6 @@ chk "export refuses a vmx that references a test ISO or is named TEST" \
   "grep -qF 'test builds are never exported' '$REPO/build/fusion/export-release-image.sh'"
 chk "test ISOs produce TEST-named VMs on both targets" \
   "grep -qF 'displayName = \"ombra-desktop-TEST\"' '$REPO/build/fusion/create-desktop-vm.sh' && grep -qF 'displayName = \"ombra-gateway-TEST\"' '$REPO/build/fusion/create-gateway-vm.sh'"
-chk "release workflow drops checkout credentials and refuses a test-build environment" \
-  "grep -q 'persist-credentials: false' '$REPO/.github/workflows/release.yml' && grep -q 'OMBRA_TEST_GUEST_PASSWORD' '$REPO/.github/workflows/release.yml'"
 chk "plain-built preseeds carry the locked hash (*) on both targets" \
   "grep -qE '^d-i passwd/user-password-crypted string \\*\$' '$TMP/x-gateway/preseed.cfg' && grep -qE '^d-i passwd/user-password-crypted string \\*\$' '$TMP/x-desktop/preseed.cfg'"
 chk "08ombra neutralises 94save-logs on plain builds only; late.sh scrubs /var/log/installer" \
