@@ -456,7 +456,7 @@ else
   bad "boot binaries do not carry a covering font — the unlock's rounded corners would draw boxy (or ASCII would break)"
 fi
 
-# ---- no crypto wallets except Feather ----
+# ---- wallets: Feather (monero) and Electrum (bitcoin) ship; Sparrow does not ----
 SPARROW_HITS="$(grep -rl -i 'sparrow' "$T2" 2>/dev/null | head -5)"
 if [ -z "$SPARROW_HITS" ] \
    && [ ! -e "$REPO/build/pins/sparrow.txt" ] \
@@ -465,17 +465,36 @@ if [ -z "$SPARROW_HITS" ] \
 else
   bad "Sparrow Wallet is still referenced (must not ship): ${SPARROW_HITS:-pin/staging}"
 fi
-# ...and Feather must NOT ship anywhere: not in Debian's repos, and not vendored.
-# Shipping surfaces only: docs may explain the absence.
-FEATHER_HITS="$(grep -rn -i "feather" "$REPO/desktop/late-command.sh" "$REPO/desktop/preseed.cfg" \
-                  "$REPO/desktop/rootfs/usr/local/share/applications" \
-                  "$REPO/desktop/rootfs/opt" \
-                  "$REPO/build/pins" "$REPO/build/make-install-iso.sh" 2>/dev/null | grep -v Binary | head -5)"
-if [ -z "$FEATHER_HITS" ] && [ ! -e "$T2/usr/local/share/applications/feather.desktop" ] \
-   && [ ! -e "$T2/opt/feather" ]; then
-  ok "no Feather on any shipping surface (Debian sid has it when wanted)"
+# ---- the pinned upstream apps: pinned, staged, re-verified in the installer, unpacked, launched ----
+LC_APPS="$REPO/desktop/late-command.sh"
+for app in feather simplex; do
+  PIN="$REPO/build/pins/$app.txt"
+  if [ -f "$PIN" ] \
+     && awk -F= '$1=="sha256"{ok=length($2)==64} END{exit ok?0:1}' "$PIN" \
+     && grep -q "stage_pinned $app" "$MKI" || grep -q 'for app in feather simplex' "$MKI"; then
+    ok "$app is pinned with a sha256 and staged by the ISO build"
+  else
+    bad "$app pin or staging is missing"
+  fi
+done
+if grep -q 'verify_staged feather' "$LC_APPS" && grep -q 'verify_staged simplex' "$LC_APPS" \
+   && grep -q 'sha256sum "$APP_FILE"' "$LC_APPS" && grep -q '/tmp/ombra-apps-fail' "$LC_APPS" \
+   && grep -q 'appimage-extract' "$LC_APPS" && grep -q '/var/tmp/simplex.deb' "$LC_APPS"; then
+  ok "Feather and SimpleX are hash re-verified in the installer, installed, and a failure parks the install"
 else
-  bad "Feather is still referenced or shipped: $FEATHER_HITS"
+  bad "the installer's Feather/SimpleX handling is incomplete"
+fi
+if [ -x "$REPO/desktop/rootfs/usr/local/bin/feather" ] \
+   && grep -qx 'Exec=/usr/local/bin/feather' "$REPO/desktop/rootfs/usr/local/share/applications/feather.desktop" \
+   && python3 -c "import json,sys; c=json.load(open(sys.argv[1])); assert c['useLocalTor'] is True and c['proxy']==1 and c['socks5Host']=='10.55.10.1' and c['disableWebsocket'] is True and c['torPrivacyLevel']==2 and c['firstRun'] is False" "$REPO/desktop/rootfs/etc/skel/.config/feather/settings.json"; then
+  ok "Feather launches through its wrapper and is preset to the gateway's Tor with no bundled Tor and no Feather-server traffic"
+else
+  bad "Feather wrapper, launcher or preset is wrong"
+fi
+if grep -q 'kleopatra pinentry-qt scdaemon onionshare electrum' "$LC_APPS" && grep -q 'systemctl mask "$u"' "$LC_APPS" && grep -q 'tor@default.service' "$LC_APPS"; then
+  ok "Kleopatra, OnionShare and Electrum install from Debian and the desktop's tor service is masked"
+else
+  bad "Debian application install or tor masking is missing"
 fi
 
 # ---- the Tor Browser must actually be INSTALLED (both halves asserted) ----
@@ -1049,6 +1068,13 @@ elif grep -qF 'kact-wipe.service' "$REPO/desktop/late-command.sh" \
 else
   bad "kactivities volatile-database units missing — recording would persist to disk again"
 fi
+# kact-wipe sits before a /home mount: with default dependencies it joins basic.target and closes an ordering cycle that makes systemd delete local-fs.target's start job
+if grep -qx 'DefaultDependencies=no' "$REPO/desktop/rootfs/etc/systemd/system/kact-wipe.service" \
+   && grep -qx 'After=home.mount systemd-remount-fs.service' "$REPO/desktop/rootfs/etc/systemd/system/kact-wipe.service"; then
+  ok "kact-wipe has no default dependencies (no sysinit ordering cycle at boot)"
+else
+  bad "kact-wipe.service pulls default dependencies — boot ordering cycle through local-fs.target"
+fi
 # the session GL provider: the session env must not pin LIBGL_ALWAYS_SOFTWARE — the kwin compositor runs on hardware GL
 GL_HOOK="$REPO/desktop/rootfs/etc/skel/.config/plasma-workspace/env/zz-software-gl.sh"
 if [ -f "$GL_HOOK" ] || grep -rqF 'LIBGL_ALWAYS_SOFTWARE' "$REPO/desktop/rootfs/etc/skel/" 2>/dev/null; then
@@ -1204,6 +1230,8 @@ chk "desktop user is not in sudo: default groups pinned, gpasswd + sudo purge in
   "grep -qE '^d-i passwd/user-default-groups string audio video\$' '$REPO/desktop/preseed.cfg' && grep -q 'in-target gpasswd -d ombra sudo' '$REPO/desktop/late-command.sh' && grep -q 'ombra is still in the sudo group' '$REPO/desktop/late-command.sh'"
 chk "gateway keeps sudo (its NOPASSWD grants need it)" \
   "! grep -q 'purge_present sudo' '$REPO/gateway/late-command.sh' && ! grep -q 'user-default-groups string audio' '$REPO/gateway/preseed.cfg'"
+chk "gateway installs the sudo package its NOPASSWD grants and console commands need" \
+  "grep -E '^d-i pkgsel/include string' '$REPO/gateway/preseed.cfg' | grep -qE ' sudo( |\$)'"
 chk "desktop firewall egress and ping are scoped to the gateway host, not the /24" \
   "grep -q 'ip daddr 10.55.10.1 counter accept' '$T2/etc/nftables.conf' && grep -q 'ip saddr 10.55.10.1 ip protocol icmp' '$T2/etc/nftables.conf' && ! grep -v '^ *#' '$T2/etc/nftables.conf' | grep -q '10.55.10.0/24'"
 chk "NetworkManager profiles forced to 0600 in late.sh (git cannot carry the mode)" \
@@ -1301,6 +1329,52 @@ chk "gateway torrc disables the unix control socket" \
   "grep -qx 'ControlSocket 0' '$REPO/gateway/rootfs/etc/tor/torrc'"
 chk "no tor drop-in depends on a control socket path" \
   "! grep -rq '/run/tor/control\\b' '$REPO/gateway/rootfs/etc/systemd' 2>/dev/null || ! grep -rE 'ExecStartPost.*run/tor/control' '$REPO/gateway/rootfs/etc/systemd' >/dev/null"
+
+echo "== transfer disks =="
+TU="$REPO/desktop/rootfs/etc/systemd/system"
+chk "the shared disk mounts by its OMBRA-SHARE label as vfat, synchronously, private, noexec,nosuid,nodev, uid 1000" \
+  "grep -qx 'What=/dev/disk/by-label/OMBRA-SHARE' '$TU/mnt-transfer-shared.mount' && grep -qx 'Where=/mnt/transfer/shared' '$TU/mnt-transfer-shared.mount' && grep -qx 'Type=vfat' '$TU/mnt-transfer-shared.mount' && grep -E '^Options=' '$TU/mnt-transfer-shared.mount' | grep -q 'sync,flush' && grep -E '^Options=' '$TU/mnt-transfer-shared.mount' | grep -q 'umask=077' && grep -E '^Options=' '$TU/mnt-transfer-shared.mount' | grep -q 'noexec,nosuid,nodev' && grep -E '^Options=' '$TU/mnt-transfer-shared.mount' | grep -q 'uid=1000'"
+chk "the automount names the path of its mount unit and is only offered when the disk exists" \
+  "grep -qx 'Where=/mnt/transfer/shared' '$TU/mnt-transfer-shared.automount' && grep -qx 'ConditionPathExists=/dev/disk/by-label/OMBRA-SHARE' '$TU/mnt-transfer-shared.automount'"
+chk "the old inbox and outbox units are gone" \
+  "! ls '$TU'/mnt-transfer-inbox.* '$TU'/mnt-transfer-outbox.* >/dev/null 2>&1"
+chk "late.sh enables the automount and fails the install if it cannot" \
+  "grep -q 'systemctl enable mnt-transfer-shared.automount' '$REPO/desktop/late-command.sh' && grep -q 'transfer mounts' '$REPO/desktop/late-command.sh'"
+chk "the raw shared disk is hidden from Dolphin" \
+  "grep -q 'OMBRA-SHARE' '$REPO/desktop/rootfs/etc/udev/rules.d/91-ombra-hide-transfer-disks.rules' && grep -q 'UDISKS_IGNORE' '$REPO/desktop/rootfs/etc/udev/rules.d/91-ombra-hide-transfer-disks.rules'"
+chk "the transfer path does not depend on udisks2: it is in no explicit install list" \
+  "! grep -qE '(^|[ ])udisks2([ ]|\$)' '$REPO/desktop/late-command.sh' '$REPO/desktop/preseed.cfg'"
+chk "the copy script is executable, parses, targets the shared folder and syncs it" \
+  "[ -x '$REPO/desktop/rootfs/usr/local/bin/ombra-send-to-mac' ] && bash -n '$REPO/desktop/rootfs/usr/local/bin/ombra-send-to-mac' && grep -q 'out=/mnt/transfer/shared' '$REPO/desktop/rootfs/usr/local/bin/ombra-send-to-mac' && grep -q 'sync -f' '$REPO/desktop/rootfs/usr/local/bin/ombra-send-to-mac' && grep -q 'mountpoint -q' '$REPO/desktop/rootfs/usr/local/bin/ombra-send-to-mac'"
+chk "the Dolphin service menu runs that script on selected files" \
+  "grep -qx 'Exec=/usr/local/bin/ombra-send-to-mac %F' '$REPO/desktop/rootfs/usr/share/kio/servicemenus/ombra-send-to-mac.desktop'"
+chk "the sidebar has one Mac Shared Folder place and the file is well-formed XML" \
+  "python3 -c \"import sys,xml.dom.minidom as m; m.parse(sys.argv[1])\" '$REPO/desktop/rootfs/etc/skel/.local/share/user-places.xbel' && grep -q 'file:///mnt/transfer/shared' '$REPO/desktop/rootfs/etc/skel/.local/share/user-places.xbel' && ! grep -q 'From Mac\|To Mac' '$REPO/desktop/rootfs/etc/skel/.local/share/user-places.xbel'"
+
+chk "leak probe stamps its report and the host harness only trusts a report from its own run" \
+  "grep -q 'started-epoch' '$G2/usr/local/sbin/ombra-leak-probe' && grep -q 'started-epoch' '$REPO/tests/leaks/run-gateway-leaks.sh' && bash -n '$REPO/tests/leaks/run-gateway-leaks.sh' && bash -n '$G2/usr/local/sbin/ombra-leak-probe'"
+
+echo "== privacy applications =="
+D2="$REPO/desktop/rootfs"
+chk "gateway firewall lets only Tor reach the desktop on the onion-service port range, and the desktop accepts it only from the gateway" \
+  "grep -q 'meta skuid \"debian-tor\" oifname \"ombra-intnet\" ip daddr 10.55.10.0/24 tcp dport 17600-17659' '$G2/etc/nftables.conf' && grep -q 'ip saddr 10.55.10.1 tcp dport 17600-17659' '$D2/etc/nftables.conf'"
+chk "the control-port filter's onion-service ports match both firewalls (17600-17659)" \
+  "grep -q 'ONION_PORT_MIN: u16 = 17600' '$REPO/core/src/torctl.rs' && grep -q 'ONION_PORT_MAX: u16 = 17659' '$REPO/core/src/torctl.rs'"
+chk "OnionShare listens off-loopback only because the Whonix-style workstation marker exists" \
+  "[ -f '$D2/usr/share/anon-ws-base-files/workstation' ]"
+chk "OnionShare is preset to the gateway's filtered control port and SOCKS port, with updates off" \
+  "python3 -c \"import json,sys; c=json.load(open(sys.argv[1])); assert c['connection_type']=='control_port' and c['control_port_address']=='10.55.10.1' and c['control_port_port']==9052 and c['socks_address']=='10.55.10.1' and c['socks_port']==9050 and c['use_autoupdate'] is False and c['bridges_enabled'] is False\" '$D2/etc/skel/.config/onionshare/onionshare.json'"
+chk "Electrum is preset to the gateway's SOCKS port with update checks off" \
+  "python3 -c \"import json,sys; c=json.load(open(sys.argv[1])); assert c['proxy'].startswith('socks5:10.55.10.1:9050') and c['check_updates'] is False\" '$D2/etc/skel/.electrum/config'"
+chk "dirmngr is Tor-only and the local SOCKS forwarder exists" \
+  "grep -qx 'use-tor' '$D2/etc/skel/.gnupg/dirmngr.conf' && grep -qx 'ListenStream=127.0.0.1:9050' '$D2/etc/systemd/system/ombra-socks.socket' && grep -q 'systemd-socket-proxyd 10.55.10.1:9050' '$D2/etc/systemd/system/ombra-socks.service'"
+
+chk "SimpleX launches through the proxychains wrapper pointed at the gateway's Tor, and its launcher entry is replaced to use it" \
+  "[ -x '$D2/usr/local/bin/simplex' ] && grep -q 'proxychains4 -q -f /etc/ombra/proxychains.conf /opt/simplex/bin/simplex' '$D2/usr/local/bin/simplex' && grep -qx 'socks5 10.55.10.1 9050' '$D2/etc/ombra/proxychains.conf' && grep -q 'Exec=/usr/local/bin/simplex' '$REPO/desktop/late-command.sh' && grep -q 'proxychains4 ' '$REPO/desktop/late-command.sh'"
+
+echo "== boot ordering =="
+chk "accounts-daemon is ordered after logind so its sandbox finds /run/systemd/seats" \
+  "grep -qx 'After=systemd-logind.service' '$REPO/desktop/rootfs/etc/systemd/system/accounts-daemon.service.d/ombra-after-logind.conf' && grep -qx 'Wants=systemd-logind.service' '$REPO/desktop/rootfs/etc/systemd/system/accounts-daemon.service.d/ombra-after-logind.conf'"
 
 if [ "$FAILS" -gt 0 ]; then
   echo "FAILED: $FAILS test(s)"

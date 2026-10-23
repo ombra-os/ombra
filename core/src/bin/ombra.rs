@@ -47,7 +47,9 @@ fn decide_mode(args: &[String], stdout_is_tty: bool) -> Mode {
     if args.iter().any(|a| a == "--plain") || !stdout_is_tty {
         return Mode::Plain;
     }
-    Mode::Tui { watch: args.iter().any(|a| a == "--watch") }
+    Mode::Tui {
+        watch: args.iter().any(|a| a == "--watch"),
+    }
 }
 
 fn main() -> ExitCode {
@@ -83,7 +85,9 @@ fn run_tui(watch: bool) -> io::Result<()> {
     let area = Rect::new(0, 0, cols, rows);
     let mut terminal = Terminal::with_options(
         backend,
-        ratatui::TerminalOptions { viewport: ratatui::Viewport::Fixed(area) },
+        ratatui::TerminalOptions {
+            viewport: ratatui::Viewport::Fixed(area),
+        },
     )?;
     panel::enter(terminal.backend_mut())?;
     let result = session(&mut terminal, watch);
@@ -126,9 +130,15 @@ fn draw_panel(terminal: &mut Tui, snap: &Snapshot, hint: Option<&str>) -> io::Re
     terminal.draw(|f| panel::draw(f, snap, hint)).map(|_| ())
 }
 
-fn recv_section(rx: &Receiver<(panel::ProbeKey, panel::Section)>) -> io::Result<(panel::ProbeKey, panel::Section)> {
-    rx.recv()
-        .map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, format!("probe thread ended: {e}")))
+fn recv_section(
+    rx: &Receiver<(panel::ProbeKey, panel::Section)>,
+) -> io::Result<(panel::ProbeKey, panel::Section)> {
+    rx.recv().map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            format!("probe thread ended: {e}"),
+        )
+    })
 }
 
 fn wait_or_quit(period: Duration) -> io::Result<bool> {
@@ -167,7 +177,10 @@ mod tests {
 
     #[test]
     fn watch_alone_is_a_watching_panel() {
-        assert_eq!(decide_mode(&args(&["--watch"]), true), Mode::Tui { watch: true });
+        assert_eq!(
+            decide_mode(&args(&["--watch"]), true),
+            Mode::Tui { watch: true }
+        );
     }
 
     #[test]
@@ -177,7 +190,10 @@ mod tests {
 
     #[test]
     fn plain_wins_over_watch() {
-        assert_eq!(decide_mode(&args(&["--plain", "--watch"]), true), Mode::Plain);
+        assert_eq!(
+            decide_mode(&args(&["--plain", "--watch"]), true),
+            Mode::Plain
+        );
     }
 
     #[test]
@@ -207,13 +223,22 @@ mod tests {
             kind: KeyEventKind::Press,
             state: crossterm::event::KeyEventState::NONE,
         };
-        assert!(is_quit_key(&press(KeyCode::Char('c'), KeyModifiers::CONTROL)));
+        assert!(is_quit_key(&press(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL
+        )));
         assert!(is_quit_key(&press(KeyCode::Char('q'), KeyModifiers::NONE)));
         let mut release = press(KeyCode::Char('q'), KeyModifiers::NONE);
         release.kind = KeyEventKind::Release;
         assert!(!is_quit_key(&release));
         assert!(!is_quit_key(&press(KeyCode::Char('c'), KeyModifiers::NONE)));
-        assert!(!is_quit_key(&press(KeyCode::Char('x'), KeyModifiers::CONTROL)));
-        assert!(!is_quit_key(&press(KeyCode::Char('C'), KeyModifiers::CONTROL)));
+        assert!(!is_quit_key(&press(
+            KeyCode::Char('x'),
+            KeyModifiers::CONTROL
+        )));
+        assert!(!is_quit_key(&press(
+            KeyCode::Char('C'),
+            KeyModifiers::CONTROL
+        )));
     }
 }

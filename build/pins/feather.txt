@@ -1,0 +1,13 @@
+# Feather Wallet (Monero) — upstream AppImage, linux-arm64.
+# Provenance: the AppImage's detached signature (feather-2.8.1-arm64.AppImage.asc) verified against the project's signing key
+# FeatherWallet <dev@featherwallet.org>, fingerprint 8185E158A33330C7FD61BC0D1F76E155CEFBA71C, on 2026-10-22.
+# The enforced anchor is the sha256 below.
+version=2.8.1
+file=feather-2.8.1-arm64.AppImage
+sha256=ed6e8e885539ee2a76e49ef6cbbeda8586959ae5ad30432f102669a83081aecd
+signer=FeatherWallet <dev@featherwallet.org>
+signer_fingerprint=8185E158A33330C7FD61BC0D1F76E155CEFBA71C
+signature=feather-2.8.1-arm64.AppImage.asc
+license=BSD-3-Clause
+url=https://github.com/feather-wallet/feather/releases/download/2.8.1/
+archive_url=https://github.com/feather-wallet/feather/releases/download/2.8.1/

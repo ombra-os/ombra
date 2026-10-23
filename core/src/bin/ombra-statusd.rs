@@ -24,8 +24,13 @@ schema: {\"state\":\"ok|semi|fail|unknown\",\"gateway\":bool,\"tor\":bool,
          \"tooltip\":\"...\"}  — no exit IP is ever included";
 
 enum Mode {
-    Daemon { socket: Option<PathBuf>, cache: Option<PathBuf> },
-    Once { cache: Option<PathBuf> },
+    Daemon {
+        socket: Option<PathBuf>,
+        cache: Option<PathBuf>,
+    },
+    Once {
+        cache: Option<PathBuf>,
+    },
     Probe,
     Help,
 }
@@ -134,13 +139,21 @@ mod tests {
 
     #[test]
     fn bare_invocation_is_the_daemon() {
-        assert!(matches!(parse_args(args(&[])), Ok(Mode::Daemon { socket: None, cache: None })));
+        assert!(matches!(
+            parse_args(args(&[])),
+            Ok(Mode::Daemon {
+                socket: None,
+                cache: None
+            })
+        ));
     }
 
     #[test]
     fn flags_pick_their_modes_and_overrides() {
         let mode = parse_args(args(&["--socket", "/tmp/x.sock"])).unwrap();
-        assert!(matches!(mode, Mode::Daemon { socket: Some(p), .. } if p == PathBuf::from("/tmp/x.sock")));
+        assert!(
+            matches!(mode, Mode::Daemon { socket: Some(p), .. } if p == PathBuf::from("/tmp/x.sock"))
+        );
 
         assert!(matches!(parse_args(args(&["--probe"])), Ok(Mode::Probe)));
 

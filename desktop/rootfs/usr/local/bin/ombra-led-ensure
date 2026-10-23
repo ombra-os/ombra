@@ -15,6 +15,18 @@ while [ "$i" -lt 60 ]; do
     sleep 2
 done
 sleep 8
+# keep the Notifications bell visible in the tray (not tucked into the overflow), so a missed update notice is never out of sight.
+# plasmashell rewrites its config on exit, so the shell is stopped around the edit; this happens once, on the first login.
+cfg="$HOME/.config/plasma-org.kde.plasma.desktop-appletsrc"
+tid=$(sed -n 's/^SystrayContainmentId=//p' "$cfg" 2>/dev/null | head -n1)
+if [ -n "$tid" ] && ! grep -q '^shownItems=.*org.kde.plasma.notifications' "$cfg"; then
+    systemctl --user stop plasma-plasmashell.service >/dev/null 2>&1
+    sleep 2
+    kwriteconfig6 --file plasma-org.kde.plasma.desktop-appletsrc --group Containments --group "$tid" --group General \
+        --key shownItems org.kde.plasma.notifications
+    systemctl --user start plasma-plasmashell.service >/dev/null 2>&1
+    sleep 8
+fi
 present=$(dbus-send --session --print-reply --dest=org.kde.plasmashell /PlasmaShell \
     org.kde.PlasmaShell.evaluateScript \
     string:'var p=panels()[0]; var ids=p.widgetIds; var out=[]; for (var i=0;i<ids.length;i++){ out.push(p.widgetById(ids[i]).type); } out.join(",");' \

@@ -1,0 +1,11 @@
+{
+    "disableWebsocket": true,
+    "firstRun": false,
+    "hideUpdateNotifications": true,
+    "proxy": 1,
+    "socks5Host": "10.55.10.1",
+    "socks5Port": "9050",
+    "torPrivacyLevel": 2,
+    "useLocalTor": true,
+    "useOnionNodes": true
+}

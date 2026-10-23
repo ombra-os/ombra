@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Service
+MimeType=application/octet-stream;inode/directory;
+Actions=sendToMac
+X-KDE-Priority=TopLevel
+
+[Desktop Action sendToMac]
+Name=Copy to Mac Shared Folder
+Icon=document-export
+Exec=/usr/local/bin/ombra-send-to-mac %F

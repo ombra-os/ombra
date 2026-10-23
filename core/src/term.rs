@@ -5,16 +5,18 @@ use std::io::{self, Write};
 use std::process;
 
 use crossterm::cursor::{Hide, Show};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use crossterm::ExecutableCommand;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 
 /// Liveness marker for ombra-askpass-fallback.service (holds our pid).
 pub const ASKPASS_LIVE_MARKER: &str = "/run/ombra/askpass-live";
 
 /// The Linux console's 16 palette slots, in the Ombra dusk colors.
 const LINUX_PALETTE: [&str; 16] = [
-    "0b0c11", "f0716b", "56d68a", "f2c260", "5f6bb8", "b48fff", "8fd6ff", "c9c8c3",
-    "666973", "f0716b", "56d68a", "f2c260", "8f9bff", "b48fff", "8fd6ff", "f4f3ef",
+    "0b0c11", "f0716b", "56d68a", "f2c260", "5f6bb8", "b48fff", "8fd6ff", "c9c8c3", "666973",
+    "f0716b", "56d68a", "f2c260", "8f9bff", "b48fff", "8fd6ff", "f4f3ef",
 ];
 
 /// Reprograms the console palette (ESC ] P n rrggbb); a no-op anywhere but the Linux VT.
@@ -63,7 +65,11 @@ pub fn open_writer_tty() -> Option<Box<dyn Write>> {
     if let Ok(f) = fs::OpenOptions::new().write(true).open("/dev/tty1") {
         return Some(Box::new(f));
     }
-    fs::OpenOptions::new().write(true).open("/dev/tty").ok().map(|f| Box::new(f) as Box<dyn Write>)
+    fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/tty")
+        .ok()
+        .map(|f| Box::new(f) as Box<dyn Write>)
 }
 
 /// Read-write boot-tty handle; raw mode set on this handle's OWN fd (not crossterm's controlling-tty lookup); Drop restores termios.
@@ -82,7 +88,10 @@ impl TtyHandle {
                 .custom_flags(0o400000) // O_NOCTTY: never steal a controlling tty
                 .open(path)
             {
-                let mut h = TtyHandle { file: f, saved: None };
+                let mut h = TtyHandle {
+                    file: f,
+                    saved: None,
+                };
                 h.set_raw();
                 return Some(h);
             }
@@ -358,7 +367,10 @@ mod tests {
             use std::io::Write as _;
             w.write_all(b"\x1b[48;128R").unwrap();
         });
-        assert_eq!(cursor_size(&mut r, std::time::Duration::from_secs(2)), (48, 128));
+        assert_eq!(
+            cursor_size(&mut r, std::time::Duration::from_secs(2)),
+            (48, 128)
+        );
         writer.join().unwrap();
     }
 
@@ -382,12 +394,20 @@ mod tests {
         use std::os::unix::io::FromRawFd as _;
         let mut fds = [0i32; 2];
         assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0, "pipe");
-        unsafe { (std::fs::File::from_raw_fd(fds[0]), std::fs::File::from_raw_fd(fds[1])) }
+        unsafe {
+            (
+                std::fs::File::from_raw_fd(fds[0]),
+                std::fs::File::from_raw_fd(fds[1]),
+            )
+        }
     }
 
     #[test]
     fn panic_hook_restores_then_chains_to_the_previous_hook() {
-        use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
 
         let restored = Arc::new(AtomicBool::new(false));
         let chained = Arc::new(AtomicBool::new(false));

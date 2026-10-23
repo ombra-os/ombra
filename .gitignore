@@ -47,3 +47,4 @@ id_*
 *.nvram
 *.lck
 .vmwarevm/
+!build/update-pubkey.pem

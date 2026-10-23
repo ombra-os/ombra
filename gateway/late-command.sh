@@ -76,6 +76,8 @@ in-target systemctl enable systemd-networkd.service
 in-target systemctl enable dnsmasq.service
 in-target systemctl enable nftables.service
 in-target systemctl enable ombra-timesync.timer
+chmod 0755 /target/usr/local/sbin/ombra-update
+in-target systemctl enable ombra-update-check.timer ombra-update-commit.timer
 in-target systemctl enable ombra-torctl-filter.service
 
 # ombra carries no group memberships beyond its own; the control-port side door needs one (systemcheck asserts it)

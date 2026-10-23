@@ -10,7 +10,10 @@ license copies live in `desktop/rootfs/usr/share/ombra-assets/`.
 | Component | Version/commit | License | Pin / provenance |
 |---|---|---|---|
 | Debian | trixie (13.7.0 netinst) | DFSG-free aggregate | build/pins/debian-netinst-arm64.txt |
-| Tor Browser (alpha — only channel with linux-aarch64 builds) | 16.0a13 | MPL-2.0 (+ bundled licenses in the browser directory) | build/pins/torbrowser.txt |
+| Tor Browser (alpha — only channel with linux-aarch64 builds) | 16.0a14 | MPL-2.0 (+ bundled licenses in the browser directory) | build/pins/torbrowser.txt |
+| Feather Wallet (AppImage, signature verified at build) | see build/pins/feather.txt | BSD-3-Clause | build/pins/feather.txt |
+| SimpleX Chat (arm64 desktop deb; upstream does not sign it, hash pin only) | see build/pins/simplex.txt | AGPL-3.0 | build/pins/simplex.txt |
+| Kleopatra, OnionShare, Electrum, proxychains4 (Debian trixie packages) | trixie | GPL-2.0-or-later, GPL-3.0, MIT, GPL-2.0-or-later | Debian suite |
 | Colloid-kde (look-and-feel, desktop theme, aurorae, color scheme, Kvantum, SDDM greeter) | commit `b768904d10ba9fcb95abfb59538eab100b1fed1e` | GPL-3.0 | desktop/rootfs/usr/share/ombra-assets/README.md |
 | Kaze icons (dark variant) | commit `ab77c4d1cbfbb1fc9de1a125a3f9ed74c2513cd3` | GPL-3.0 | build/pins/kaze.txt |
 | Phinger cursors (light variant) | tag `v2.1` | CC-BY-SA-4.0 | desktop/rootfs/usr/share/ombra-assets/README.md |

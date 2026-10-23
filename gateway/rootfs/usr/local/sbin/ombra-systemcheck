@@ -169,6 +169,11 @@ else
     esac
 fi
 
+# 6b. a newer version exists (the boot-time check runs a few minutes after boot; absent file = nothing to say)
+if [ "$(head -n1 /run/ombra/update 2>/dev/null)" = available ]; then
+    warn "Update" "a new version is available - run: sudo ombra-update apply (Persistent mode)"
+fi
+
 # 7. no failed units (our own excluded)
 NFAILED=$(systemctl --failed --no-legend 2>/dev/null | grep -cv 'ombra-systemcheck' || true)
 if [ "$NFAILED" = "0" ]; then

@@ -1,0 +1,8 @@
+[Unit]
+Description=Local SOCKS port for apps that expect 127.0.0.1:9050 (forwarded to the gateway's Tor)
+
+[Socket]
+ListenStream=127.0.0.1:9050
+
+[Install]
+WantedBy=sockets.target

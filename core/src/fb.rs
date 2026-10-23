@@ -36,8 +36,8 @@ fn xterm_256(n: u8) -> u32 {
     match n {
         0..=15 => {
             const BASE: [u32; 16] = [
-                0x000000, 0xcd0000, 0x00cd00, 0xcdcd00, 0x0000ee, 0xcd00cd, 0x00cdcd, 0xe5e5e5, 0x7f7f7f,
-                0xff0000, 0x00ff00, 0xffff00, 0x5c5cff, 0xff00ff, 0x00ffff, 0xffffff,
+                0x000000, 0xcd0000, 0x00cd00, 0xcdcd00, 0x0000ee, 0xcd00cd, 0x00cdcd, 0xe5e5e5,
+                0x7f7f7f, 0xff0000, 0x00ff00, 0xffff00, 0x5c5cff, 0xff00ff, 0x00ffff, 0xffffff,
             ];
             BASE[n as usize]
         }
@@ -167,7 +167,11 @@ impl Renderer {
             return;
         }
         let i = y as usize * self.width + x as usize;
-        self.pixels[i] = if alpha >= 255 { col } else { mix(col, self.pixels[i], alpha) };
+        self.pixels[i] = if alpha >= 255 {
+            col
+        } else {
+            mix(col, self.pixels[i], alpha)
+        };
     }
 
     fn fill(&mut self, x: i64, y: i64, w: i64, h: i64, col: u32) {
@@ -210,7 +214,9 @@ impl Renderer {
         let py = (self.oy + y as usize * self.ch) as i64;
         let (cw, ch) = (self.cw as i64, self.ch as i64);
         self.fill(px, py, cw, ch, bg);
-        let Some(c) = cell.symbol().chars().next() else { return };
+        let Some(c) = cell.symbol().chars().next() else {
+            return;
+        };
         if c == ' ' {
             return;
         }
@@ -221,8 +227,17 @@ impl Renderer {
                 self.fill(px + (cw - bar) / 2, py + ch / 8, bar, ch * 3 / 4, fg);
             }
             '\u{00b7}' | '\u{25cf}' => {
-                let r = if c == '\u{25cf}' { ch as f32 * 0.26 } else { ch as f32 * 0.10 };
-                self.disc(px as f32 + cw as f32 / 2.0, py as f32 + ch as f32 / 2.0, r, fg);
+                let r = if c == '\u{25cf}' {
+                    ch as f32 * 0.26
+                } else {
+                    ch as f32 * 0.10
+                };
+                self.disc(
+                    px as f32 + cw as f32 / 2.0,
+                    py as f32 + ch as f32 / 2.0,
+                    r,
+                    fg,
+                );
             }
             '\u{2500}'..='\u{257f}' => self.box_char(c, px, py, cw, ch, t, fg),
             _ => {
@@ -234,7 +249,12 @@ impl Renderer {
                 for row in 0..gh {
                     for col in 0..gw {
                         let a = cov[row * gw + col] as u32;
-                        self.put(px + (gx + col as i32) as i64, py + (gy + row as i32) as i64, fg, a);
+                        self.put(
+                            px + (gx + col as i32) as i64,
+                            py + (gy + row as i32) as i64,
+                            fg,
+                            a,
+                        );
                     }
                 }
             }
@@ -391,7 +411,11 @@ struct Fb {
 impl Fb {
     fn open() -> Option<(Fb, usize, usize)> {
         use std::os::unix::io::IntoRawFd as _;
-        let file = std::fs::OpenOptions::new().read(true).write(true).open("/dev/fb0").ok()?;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/fb0")
+            .ok()?;
         let fd = file.into_raw_fd();
         let mut var = [0u8; 256];
         let mut fix = [0u8; 256];
@@ -427,7 +451,17 @@ impl Fb {
             unsafe { libc::close(fd) };
             return None;
         }
-        Some((Fb { fd, map: map as *mut u8, map_len, stride, shifts: [red, green, blue] }, w, h))
+        Some((
+            Fb {
+                fd,
+                map: map as *mut u8,
+                map_len,
+                stride,
+                shifts: [red, green, blue],
+            },
+            w,
+            h,
+        ))
     }
 
     fn present(&mut self, r: &Renderer) {
@@ -435,7 +469,9 @@ impl Fb {
         for y in 0..r.height {
             let row = &r.pixels[y * r.width..(y + 1) * r.width];
             // SAFETY: y*stride + w*4 <= map_len by construction in open().
-            let dst = unsafe { std::slice::from_raw_parts_mut(self.map.add(y * self.stride) as *mut u32, r.width) };
+            let dst = unsafe {
+                std::slice::from_raw_parts_mut(self.map.add(y * self.stride) as *mut u32, r.width)
+            };
             for (d, &p) in dst.iter_mut().zip(row) {
                 *d = (((p >> 16) & 0xff) << rs) | (((p >> 8) & 0xff) << gs) | ((p & 0xff) << bs);
             }
@@ -462,14 +498,23 @@ pub struct PixelBackend {
 
 impl PixelBackend {
     fn open(tty: TtyHandle) -> Result<PixelBackend, TtyHandle> {
-        let Some((fb, w, h)) = Fb::open() else { return Err(tty) };
-        let Some(renderer) = Renderer::new(w, h) else { return Err(tty) };
+        let Some((fb, w, h)) = Fb::open() else {
+            return Err(tty);
+        };
+        let Some(renderer) = Renderer::new(w, h) else {
+            return Err(tty);
+        };
         // SAFETY: plain mode switch on the tty fd we own.
         unsafe { libc::ioctl(tty.raw_fd(), req(KDSETMODE), KD_GRAPHICS) };
         let (rows, cols) = renderer.grid();
         PIXEL_GRID.store(((rows as u32) << 16) | cols as u32, Ordering::Relaxed);
         art::set_pixel_mode(true);
-        Ok(PixelBackend { fb, renderer, tty, cursor: Position::new(0, 0) })
+        Ok(PixelBackend {
+            fb,
+            renderer,
+            tty,
+            cursor: Position::new(0, 0),
+        })
     }
 }
 
@@ -696,7 +741,9 @@ mod tests {
     fn border_cells_draw_lines_not_font_glyphs() {
         let mut r = Renderer::new(1280, 800).unwrap();
         let st = Style::new().fg(Color::Indexed(105));
-        for sym in ["\u{2500}", "\u{2502}", "\u{256d}", "\u{256e}", "\u{2570}", "\u{256f}"] {
+        for sym in [
+            "\u{2500}", "\u{2502}", "\u{256d}", "\u{256e}", "\u{2570}", "\u{256f}",
+        ] {
             r.clear();
             r.draw_cell(5, 5, &cell(sym, st));
             assert!(r.pixels.iter().any(|p| *p == 0x8f9bff), "{sym}");
@@ -708,7 +755,13 @@ mod tests {
         let mut r = Renderer::new(1280, 800).unwrap();
         let rect = Rect::new(10, 4, 60, 8);
         r.blit_logo(rect);
-        let lit: Vec<usize> = r.pixels.iter().enumerate().filter(|(_, p)| **p != INK).map(|(i, _)| i).collect();
+        let lit: Vec<usize> = r
+            .pixels
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| **p != INK)
+            .map(|(i, _)| i)
+            .collect();
         assert!(lit.len() > 500);
         let (cw, ch) = (r.cw, r.ch);
         let (x0, x1) = (r.ox + 10 * cw, r.ox + 70 * cw);

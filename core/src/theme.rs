@@ -84,7 +84,13 @@ pub struct ScreenLayout {
 
 pub fn line_rect(base: Rect, x: u16, y: u16) -> Rect {
     let w = base.right().saturating_sub(x);
-    Rect { x, y, width: w, height: 1 }.intersection(base)
+    Rect {
+        x,
+        y,
+        width: w,
+        height: 1,
+    }
+    .intersection(base)
 }
 
 pub fn put_left(f: &mut Frame, r: Rect, text: &str, style: Style) {
@@ -103,23 +109,62 @@ pub fn layout(area: Rect) -> ScreenLayout {
     let footer_y = bottom.saturating_sub(1 + footer_lift).max(area.y + 4);
     let clamp_above = |r: Rect| -> Rect {
         if r.y >= footer_y {
-            Rect { x: r.x, y: footer_y, width: r.width, height: 0 }
+            Rect {
+                x: r.x,
+                y: footer_y,
+                width: r.width,
+                height: 0,
+            }
         } else {
-            Rect { height: r.height.min(footer_y - r.y), ..r }
+            Rect {
+                height: r.height.min(footer_y - r.y),
+                ..r
+            }
         }
     };
     let ring_h = art::ring_height_for(area.height).min(area.height);
     const CONTENT_MIN: u16 = 9; // title + box + confirm box + info line
     let stack = ring_h + 4 + CONTENT_MIN + 1 + footer_lift;
     let top = area.y + (area.height * RING_TOP_PCT / 100).min(area.height.saturating_sub(stack));
-    let ring = clamp_above(Rect { x: area.x, y: top, width: area.width, height: ring_h });
-    let brand = clamp_above(Rect { x: area.x, y: top + ring_h, width: area.width, height: 1 });
-    let title = clamp_above(Rect { x: area.x, y: brand.y.saturating_add(2), width: area.width, height: 1 });
+    let ring = clamp_above(Rect {
+        x: area.x,
+        y: top,
+        width: area.width,
+        height: ring_h,
+    });
+    let brand = clamp_above(Rect {
+        x: area.x,
+        y: top + ring_h,
+        width: area.width,
+        height: 1,
+    });
+    let title = clamp_above(Rect {
+        x: area.x,
+        y: brand.y.saturating_add(2),
+        width: area.width,
+        height: 1,
+    });
     let content_y = title.y.saturating_add(2);
     let content_h = bottom.saturating_sub(content_y + 1); // keep 1 footer row
-    let content = clamp_above(Rect { x: area.x, y: content_y, width: area.width, height: content_h });
-    let footer = Rect { x: area.x, y: footer_y, width: area.width, height: 1 };
-    ScreenLayout { ring, brand, title, content, footer }
+    let content = clamp_above(Rect {
+        x: area.x,
+        y: content_y,
+        width: area.width,
+        height: content_h,
+    });
+    let footer = Rect {
+        x: area.x,
+        y: footer_y,
+        width: area.width,
+        height: 1,
+    };
+    ScreenLayout {
+        ring,
+        brand,
+        title,
+        content,
+        footer,
+    }
 }
 
 /// Fits `text` into `max` cells, ending in an ellipsis when it had to cut.
@@ -161,7 +206,10 @@ pub fn hint_line(hints: &[(&str, &str)]) -> Line<'static> {
         if i > 0 {
             spans.push(Span::styled(format!("  {SEP}  "), fg(ACCENT)));
         }
-        spans.push(Span::styled(format!(" {key} "), Style::new().fg(TEXT).bg(KEYCAP_BG)));
+        spans.push(Span::styled(
+            format!(" {key} "),
+            Style::new().fg(TEXT).bg(KEYCAP_BG),
+        ));
         spans.push(Span::styled(format!(" {action}"), fg(MUTED)));
     }
     Line::from(spans)
@@ -244,7 +292,12 @@ pub fn put_block(f: &mut Frame, area: Rect, lines: &[(&str, Style)]) {
         if text.is_empty() {
             continue; // spacing row
         }
-        let row = Rect { x, y: area.y + i as u16, width: w, height: 1 };
+        let row = Rect {
+            x,
+            y: area.y + i as u16,
+            width: w,
+            height: 1,
+        };
         let p = Paragraph::new(Line::styled(*text, *style));
         f.render_widget(p, row);
     }
@@ -271,9 +324,19 @@ pub fn center_horiz(outer: Rect, w: u16, h: u16) -> Rect {
 /// 1-row slice of a band; zero-height when it would leave the band.
 pub fn row_in(r: Rect, offset: u16) -> Rect {
     if offset >= r.height {
-        return Rect { x: r.x, y: r.y, width: r.width, height: 0 };
+        return Rect {
+            x: r.x,
+            y: r.y,
+            width: r.width,
+            height: 0,
+        };
     }
-    Rect { x: r.x, y: r.y + offset, width: r.width, height: 1 }
+    Rect {
+        x: r.x,
+        y: r.y + offset,
+        width: r.width,
+        height: 1,
+    }
 }
 
 #[cfg(test)]
@@ -284,10 +347,17 @@ mod tests {
     fn composition_a_ring_top_center_text_stacked_beneath() {
         let area = Rect::new(0, 0, 128, 48);
         let l = layout(area);
-        assert_eq!(l.ring.y + l.ring.height, 31, "ring band above the text stack");
+        assert_eq!(
+            l.ring.y + l.ring.height,
+            31,
+            "ring band above the text stack"
+        );
         assert_eq!(l.brand.y, l.ring.bottom(), "brand directly under the ring");
         assert!(l.title.y > l.brand.y, "title below the brand");
-        assert_eq!(l.title.width, area.width, "centered chrome spans the console");
+        assert_eq!(
+            l.title.width, area.width,
+            "centered chrome spans the console"
+        );
         assert_eq!(l.title.x, area.x, "title is not beside a left ring column");
         let small = layout(Rect::new(0, 0, 90, 30));
         assert!(small.title.y > small.brand.y);
@@ -312,7 +382,15 @@ mod tests {
         assert_eq!(l.brand.height, 0);
         assert_eq!(l.title.height, 0);
         assert_eq!(l.content.height, 0);
-        assert_eq!(l.footer, ratatui::layout::Rect { x: 0, y: 4, width: 20, height: 1 });
+        assert_eq!(
+            l.footer,
+            ratatui::layout::Rect {
+                x: 0,
+                y: 4,
+                width: 20,
+                height: 1
+            }
+        );
     }
 
     #[test]
@@ -345,7 +423,17 @@ mod tests {
     #[test]
     fn palette_is_fixed_ansi_256_indexed_never_truecolor() {
         for c in [
-            RING_BRIGHT, RING_DIM, TEXT, LABEL, MUTED, GOOD, BAD, FIELD_FRAME, RULE, AMBER, KEYCAP_BG,
+            RING_BRIGHT,
+            RING_DIM,
+            TEXT,
+            LABEL,
+            MUTED,
+            GOOD,
+            BAD,
+            FIELD_FRAME,
+            RULE,
+            AMBER,
+            KEYCAP_BG,
         ] {
             assert!(
                 matches!(c, Color::Indexed(_)),
@@ -366,7 +454,9 @@ mod tests {
     #[test]
     fn boot_glyph_set_is_the_mask_caret_dot_ellipsis_and_rounded_frame() {
         let glyphs = boot_glyphs();
-        for c in ['\u{256d}', '\u{256e}', '\u{256f}', '\u{2570}', '\u{2500}', '\u{2502}'] {
+        for c in [
+            '\u{256d}', '\u{256e}', '\u{256f}', '\u{2570}', '\u{2500}', '\u{2502}',
+        ] {
             assert!(glyphs.contains(&c), "boot glyphs missing the frame's {c:?}");
         }
         assert!(glyphs.contains(&MASK));

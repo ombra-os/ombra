@@ -289,17 +289,14 @@ impl SecretFlow {
                 FlowEvent::Editing
             }
             FieldEvent::TooShort => {
-                self.message =
-                    Some(("use at least 8 characters".to_string(), Severity::Bad));
+                self.message = Some(("use at least 8 characters".to_string(), Severity::Bad));
                 FlowEvent::TooShort
             }
             FieldEvent::Submitted => {
                 let v = self.active_field().value();
                 if v != v.trim() {
-                    self.message = Some((
-                        "no leading or trailing spaces".to_string(),
-                        Severity::Bad,
-                    ));
+                    self.message =
+                        Some(("no leading or trailing spaces".to_string(), Severity::Bad));
                     return FlowEvent::TooShort;
                 }
                 if !self.on_second {
@@ -315,8 +312,7 @@ impl SecretFlow {
                 }
                 if !self.on_second {
                     self.on_second = true;
-                    self.message =
-                        Some(("repeat it to confirm".to_string(), Severity::Muted));
+                    self.message = Some(("repeat it to confirm".to_string(), Severity::Muted));
                     FlowEvent::Editing
                 } else if self.first.value == self.second.value {
                     let secret = SecretBuf::new(self.first.take());
@@ -341,9 +337,10 @@ pub fn byte_to_key(b: u8) -> Option<KeyEvent> {
     match b {
         b'\r' | b'\n' => Some(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty())),
         0x7f | 0x08 => Some(KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty())),
-        c if c.is_ascii_graphic() || c == b' ' => {
-            Some(KeyEvent::new(KeyCode::Char(c as char), KeyModifiers::empty()))
-        }
+        c if c.is_ascii_graphic() || c == b' ' => Some(KeyEvent::new(
+            KeyCode::Char(c as char),
+            KeyModifiers::empty(),
+        )),
         _ => None,
     }
 }
@@ -415,7 +412,11 @@ const KEY_SLICE: Duration = Duration::from_millis(40);
 
 impl<R: Read> KeyReader<R> {
     pub fn new(reader: Option<R>) -> Self {
-        KeyReader { reader, pending: VecDeque::new(), esc: EscState::default() }
+        KeyReader {
+            reader,
+            pending: VecDeque::new(),
+            esc: EscState::default(),
+        }
     }
 
     pub fn drain_available(&mut self) -> io::Result<Vec<KeyEvent>> {
@@ -489,7 +490,11 @@ mod tests {
     fn only_printable_ascii_is_accepted() {
         let mut f = SecretField::new("passphrase");
         for c in ['é', '日', '\u{1f600}', '\t', '\u{7f}', '\n'] {
-            assert_eq!(f.handle_key(key(KeyCode::Char(c))), FieldEvent::Ignored, "{c:?}");
+            assert_eq!(
+                f.handle_key(key(KeyCode::Char(c))),
+                FieldEvent::Ignored,
+                "{c:?}"
+            );
         }
         assert!(f.is_empty());
         type_str(&mut f, " ~!az");
@@ -500,7 +505,16 @@ mod tests {
     fn navigation_keys_never_insert_text() {
         let mut f = SecretField::new("passphrase");
         type_str(&mut f, "abc");
-        for code in [KeyCode::Left, KeyCode::Right, KeyCode::Up, KeyCode::Down, KeyCode::Esc, KeyCode::Tab, KeyCode::Home, KeyCode::Delete] {
+        for code in [
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Esc,
+            KeyCode::Tab,
+            KeyCode::Home,
+            KeyCode::Delete,
+        ] {
             assert_eq!(f.handle_key(key(code)), FieldEvent::Ignored);
         }
         assert_eq!(f.value(), "abc");
@@ -529,7 +543,11 @@ mod tests {
     #[test]
     fn arrow_and_escape_sequences_are_swallowed_whole() {
         let mut r = ScriptedRead {
-            chunks: [Ok(b"ab\x1b[Acd\x1bOBef\x1b[1;5Cgh\x1bxij\r".to_vec()), dry()].into(),
+            chunks: [
+                Ok(b"ab\x1b[Acd\x1bOBef\x1b[1;5Cgh\x1bxij\r".to_vec()),
+                dry(),
+            ]
+            .into(),
         };
         let keys = drain_keys(&mut r).unwrap();
         let typed: String = keys
@@ -545,7 +563,15 @@ mod tests {
     #[test]
     fn an_escape_sequence_split_across_reads_is_still_swallowed() {
         let mut kr = KeyReader::new(Some(ScriptedRead {
-            chunks: [Ok(b"a\x1b".to_vec()), dry(), Ok(b"[".to_vec()), dry(), Ok(b"Db".to_vec()), dry()].into(),
+            chunks: [
+                Ok(b"a\x1b".to_vec()),
+                dry(),
+                Ok(b"[".to_vec()),
+                dry(),
+                Ok(b"Db".to_vec()),
+                dry(),
+            ]
+            .into(),
         }));
         let mut typed = String::new();
         for _ in 0..3 {
@@ -575,7 +601,9 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(60, 8)).unwrap();
 
         let f = SecretField::new("passphrase");
-        terminal.draw(|frame| frame.render_widget(&f, area)).unwrap();
+        terminal
+            .draw(|frame| frame.render_widget(&f, area))
+            .unwrap();
         let buf = terminal.backend().buffer();
         assert_eq!(buf[(7, 2)].symbol(), "\u{256d}"); // ╭
         assert_eq!(buf[(52, 2)].symbol(), "\u{256e}"); // ╮
@@ -588,16 +616,24 @@ mod tests {
         assert_eq!(buf[(9, 3)].symbol(), "\u{2588}", "caret on while empty");
         let mut dark = SecretField::new("passphrase");
         dark.set_caret(false);
-        terminal.draw(|frame| frame.render_widget(&dark, area)).unwrap();
+        terminal
+            .draw(|frame| frame.render_widget(&dark, area))
+            .unwrap();
         let buf = terminal.backend().buffer();
         for x in 8..52 {
-            assert_ne!(buf[(x, 3)].symbol(), "\u{2588}", "caret painted while dark at x={x}");
+            assert_ne!(
+                buf[(x, 3)].symbol(),
+                "\u{2588}",
+                "caret painted while dark at x={x}"
+            );
         }
         assert_eq!(buf[(25, 3)].symbol(), "p");
 
         let mut f = SecretField::new("passphrase");
         type_str(&mut f, "abc");
-        terminal.draw(|frame| frame.render_widget(&f, area)).unwrap();
+        terminal
+            .draw(|frame| frame.render_widget(&f, area))
+            .unwrap();
         let buf = terminal.backend().buffer();
         for x in 9..12 {
             assert_eq!(buf[(x, 3)].symbol(), "\u{00b7}", "not a dot at x={x}");
@@ -607,10 +643,16 @@ mod tests {
         let mut lit = SecretField::new("passphrase");
         type_str(&mut lit, "abc");
         lit.set_caret(true);
-        terminal.draw(|frame| frame.render_widget(&lit, area)).unwrap();
+        terminal
+            .draw(|frame| frame.render_widget(&lit, area))
+            .unwrap();
         let buf = terminal.backend().buffer();
         for x in 8..52 {
-            assert_ne!(buf[(x, 3)].symbol(), "\u{2588}", "caref returned over typed dots at x={x}");
+            assert_ne!(
+                buf[(x, 3)].symbol(),
+                "\u{2588}",
+                "caref returned over typed dots at x={x}"
+            );
         }
         for x in 8..52 {
             assert_ne!(buf[(x, 3)].symbol(), "=", "'=' bullet regressed at x={x}");
@@ -624,10 +666,7 @@ mod tests {
         for c in "sardines1".chars() {
             flow.handle_key(key(KeyCode::Char(c)));
         }
-        assert_eq!(
-            flow.handle_key(key(KeyCode::Enter)),
-            FlowEvent::Editing
-        );
+        assert_eq!(flow.handle_key(key(KeyCode::Enter)), FlowEvent::Editing);
         assert!(flow.on_second());
         for c in "sardines2".chars() {
             flow.handle_key(key(KeyCode::Char(c)));
@@ -678,7 +717,10 @@ mod tests {
         assert!(!flow.on_second(), "must NOT spawn the confirm box");
         assert_eq!(
             flow.message(),
-            Some(("that is the public build passphrase - choose your own", Severity::Bad))
+            Some((
+                "that is the public build passphrase - choose your own",
+                Severity::Bad
+            ))
         );
         for c in "not-the-public-one".chars() {
             flow.handle_key(key(KeyCode::Char(c)));
@@ -779,7 +821,9 @@ mod tests {
 
     #[test]
     fn drain_keys_takes_a_pasted_passphrase_in_one_call() {
-        let mut r = ScriptedRead { chunks: [Ok(b"sardines1\r".to_vec()), dry()].into() };
+        let mut r = ScriptedRead {
+            chunks: [Ok(b"sardines1\r".to_vec()), dry()].into(),
+        };
         let keys = drain_keys(&mut r).unwrap();
         let typed: String = keys
             .iter()
@@ -820,33 +864,49 @@ mod tests {
 
     #[test]
     fn keyreader_serves_a_paste_without_lagging_the_poll() {
-        let mut kr =
-            KeyReader::new(Some(ScriptedRead { chunks: [Ok(b"sardines1\r".to_vec()), dry()].into() }));
+        let mut kr = KeyReader::new(Some(ScriptedRead {
+            chunks: [Ok(b"sardines1\r".to_vec()), dry()].into(),
+        }));
         let mut typed = String::new();
         for _ in 0..9 {
             match kr.next_key(Duration::ZERO).unwrap().expect("queued key") {
-                KeyEvent { code: KeyCode::Char(c), .. } => typed.push(c),
+                KeyEvent {
+                    code: KeyCode::Char(c),
+                    ..
+                } => typed.push(c),
                 other => panic!("unexpected {other:?}"),
             }
         }
         assert_eq!(typed, "sardines1");
-        assert_eq!(kr.next_key(Duration::ZERO).unwrap().unwrap().code, KeyCode::Enter);
+        assert_eq!(
+            kr.next_key(Duration::ZERO).unwrap().unwrap().code,
+            KeyCode::Enter
+        );
     }
 
     #[test]
     fn keyreader_reports_no_key_after_the_budget_on_a_silent_tty() {
-        let mut kr = KeyReader::<ScriptedRead>::new(Some(ScriptedRead { chunks: VecDeque::new() }));
+        let mut kr = KeyReader::<ScriptedRead>::new(Some(ScriptedRead {
+            chunks: VecDeque::new(),
+        }));
         let start = Instant::now();
         assert_eq!(kr.next_key(Duration::from_millis(80)).unwrap(), None);
         assert!(start.elapsed() >= Duration::from_millis(80));
-        assert!(start.elapsed() < Duration::from_secs(2), "bounded waits only");
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "bounded waits only"
+        );
     }
 
     #[test]
     fn keyreader_picks_up_a_key_arriving_mid_budget() {
-        let mut kr =
-            KeyReader::new(Some(ScriptedRead { chunks: [dry(), Ok(b"x".to_vec()), dry()].into() }));
-        let k = kr.next_key(Duration::from_secs(2)).unwrap().expect("key arrives");
+        let mut kr = KeyReader::new(Some(ScriptedRead {
+            chunks: [dry(), Ok(b"x".to_vec()), dry()].into(),
+        }));
+        let k = kr
+            .next_key(Duration::from_secs(2))
+            .unwrap()
+            .expect("key arrives");
         assert_eq!(k.code, KeyCode::Char('x'));
     }
 

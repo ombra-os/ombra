@@ -15,14 +15,12 @@ use anyhow::{bail, Context, Result};
 
 pub const GATEWAY: &str = "10.55.10.1";
 pub const GATEWAY_SOCKS: &str = "10.55.10.1:9050";
-pub const ONION_PROBE: &str =
-    "2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion";
+pub const ONION_PROBE: &str = "2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion";
 pub const CACHE_TTL_SECS: u64 = 30;
 pub const WARMUP_SECS: u64 = 120;
 pub const WARMUP_RETRY_SECS: u64 = 3;
 pub const FORCE_CACHE_ENV: &str = "OMBRA_STATUS_FORCE_CACHE";
-pub const TIMESYNC_STATE_FILES: &[&str] =
-    &["/run/ombra/timesync", "/var/lib/ombra/timesync"];
+pub const TIMESYNC_STATE_FILES: &[&str] = &["/run/ombra/timesync", "/var/lib/ombra/timesync"];
 
 /// Kill deadlines so a hung probe never wedges the daemon.
 const PING_DEADLINE: Duration = Duration::from_secs(10);
@@ -122,9 +120,7 @@ pub fn read_timesync() -> TimesyncVerdict {
 /// Fixed per-state strings; no exit IP ever.
 pub fn tooltip_for(state: State) -> &'static str {
     match state {
-        State::Ok => {
-            "Ombra: all systems nominal — all traffic routes through Tor (gateway)"
-        }
+        State::Ok => "Ombra: all systems nominal — all traffic routes through Tor (gateway)",
         State::Semi => "Ombra: partial connectivity — gateway reachable, Tor path degraded",
         State::Fail => "Ombra: ATTENTION — Tor connectivity check failed",
         State::Unknown => "Ombra: checking connectivity…",
@@ -294,7 +290,11 @@ pub fn refresh(probes: &mut dyn Probes) -> Snapshot {
     // the Tor and DNS probes only travel through the gateway: no link, no wait
     let gateway = probes.gateway_link();
     let results = if gateway {
-        (gateway, probes.tor_through_gateway(), probes.gateway_dns_onion())
+        (
+            gateway,
+            probes.tor_through_gateway(),
+            probes.gateway_dns_onion(),
+        )
     } else {
         (false, false, false)
     };
@@ -344,7 +344,12 @@ fn read_cache_snapshot(cache: &Path) -> Option<Snapshot> {
 }
 
 /// forced ⇒ cache however old (no probing); else fresh cache; else probe and serve fresh.
-pub fn once_snapshot(probes: &mut dyn Probes, cache: &Path, now: u64, force_cache: bool) -> Snapshot {
+pub fn once_snapshot(
+    probes: &mut dyn Probes,
+    cache: &Path,
+    now: u64,
+    force_cache: bool,
+) -> Snapshot {
     if force_cache {
         return read_cache_snapshot(cache)
             .unwrap_or_else(|| Snapshot::never_probed(read_timesync()));
@@ -438,7 +443,9 @@ fn daemon_on(
 
 /// Poisoning is not a status failure; recover the data and keep serving.
 fn lock(snapshot: &Mutex<Snapshot>) -> MutexGuard<'_, Snapshot> {
-    snapshot.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    snapshot
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Mode 0600; a leftover socket file is removed unless a live peer answers.
@@ -447,11 +454,13 @@ pub fn bind_socket(path: &Path) -> Result<UnixListener> {
         Ok(l) => l,
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
             if UnixStream::connect(path).is_ok() {
-                bail!("another ombra-statusd is already serving {}", path.display());
+                bail!(
+                    "another ombra-statusd is already serving {}",
+                    path.display()
+                );
             }
             let _ = fs::remove_file(path);
-            UnixListener::bind(path)
-                .with_context(|| format!("binding {}", path.display()))?
+            UnixListener::bind(path).with_context(|| format!("binding {}", path.display()))?
         }
         Err(e) => return Err(e).with_context(|| format!("binding {}", path.display())),
     };
@@ -464,7 +473,9 @@ pub fn serve_loop(
     snapshot: &Mutex<Snapshot>,
     running: &AtomicBool,
 ) -> Result<()> {
-    listener.set_nonblocking(true).context("arming the listener")?;
+    listener
+        .set_nonblocking(true)
+        .context("arming the listener")?;
     while running.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, _)) => handle_connection(stream, snapshot),
@@ -501,7 +512,10 @@ mod tests {
 
     impl FakeProbes {
         fn all_ok() -> FakeProbes {
-            FakeProbes { triple: (true, true, true), calls: Cell::new(0) }
+            FakeProbes {
+                triple: (true, true, true),
+                calls: Cell::new(0),
+            }
         }
         fn counting(probes_run: u32) -> FakeProbes {
             let triple = match probes_run {
@@ -510,7 +524,10 @@ mod tests {
                 1 => (true, false, false),
                 _ => (false, false, false),
             };
-            FakeProbes { triple, calls: Cell::new(0) }
+            FakeProbes {
+                triple,
+                calls: Cell::new(0),
+            }
         }
         fn bump(&self) {
             self.calls.set(self.calls.get() + 1);
@@ -533,7 +550,8 @@ mod tests {
     }
 
     fn tempdir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ombra-status-test-{tag}-{}", std::process::id()));
+        let d =
+            std::env::temp_dir().join(format!("ombra-status-test-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
@@ -583,13 +601,7 @@ mod tests {
     /// THE byte contract for clients; changes here are schema bumps.
     #[test]
     fn json_schema_is_pinned_golden_ok() {
-        let snap = snapshot(
-            true,
-            true,
-            true,
-            State::Ok,
-            TimesyncVerdict::Ok,
-        );
+        let snap = snapshot(true, true, true, State::Ok, TimesyncVerdict::Ok);
         assert_eq!(
             snap.to_json(),
             "{\"state\":\"ok\",\"gateway\":true,\"tor\":true,\"dns\":true,\
@@ -626,18 +638,24 @@ mod tests {
         assert_eq!(parse_snapshot("ok"), None);
         assert_eq!(parse_snapshot("not json {"), None);
         assert_eq!(
-            parse_snapshot("{\"state\":5,\"gateway\":true,\"tor\":true,\"dns\":true,\
-                            \"timesync\":\"ok\",\"checked_unix\":1}"),
+            parse_snapshot(
+                "{\"state\":5,\"gateway\":true,\"tor\":true,\"dns\":true,\
+                            \"timesync\":\"ok\",\"checked_unix\":1}"
+            ),
             None
         );
         assert_eq!(
-            parse_snapshot("{\"state\":\"mega\",\"gateway\":true,\"tor\":true,\"dns\":true,\
-                            \"timesync\":\"ok\",\"checked_unix\":1}"),
+            parse_snapshot(
+                "{\"state\":\"mega\",\"gateway\":true,\"tor\":true,\"dns\":true,\
+                            \"timesync\":\"ok\",\"checked_unix\":1}"
+            ),
             None
         );
         assert_eq!(
-            parse_snapshot("{\"state\":\"ok\",\"gateway\":true,\"tor\":true,\"dns\":true,\
-                            \"timesync\":\"ok\"}"),
+            parse_snapshot(
+                "{\"state\":\"ok\",\"gateway\":true,\"tor\":true,\"dns\":true,\
+                            \"timesync\":\"ok\"}"
+            ),
             None
         );
         let snap = parse_snapshot(
@@ -700,7 +718,11 @@ mod tests {
 
         let t = first.checked_unix;
         let fresh = once_snapshot(&mut probes, &cache, t + CACHE_TTL_SECS - 1, false);
-        assert_eq!(probes.calls.get(), 3, "TTL-1 s old: still fresh, no re-probe");
+        assert_eq!(
+            probes.calls.get(),
+            3,
+            "TTL-1 s old: still fresh, no re-probe"
+        );
         assert_eq!(fresh, first);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -743,7 +765,11 @@ mod tests {
         let mut probes = FakeProbes::all_ok();
 
         let snap = once_snapshot(&mut probes, &cache, 0, true);
-        assert_eq!(probes.calls.get(), 0, "the script's escape hatch forbids probing");
+        assert_eq!(
+            probes.calls.get(),
+            0,
+            "the script's escape hatch forbids probing"
+        );
         assert_eq!(snap.state, State::Unknown);
         assert!(!snap.gateway && !snap.tor && !snap.dns);
         assert_eq!(snap.checked_unix, 0);
@@ -771,10 +797,16 @@ mod tests {
 
         let snap = once_snapshot(&mut probes, &cache, 0, false);
         let line = snap.to_json();
-        assert_eq!(line.lines().count(), 1, "one line, no trailing newline baked in");
+        assert_eq!(
+            line.lines().count(),
+            1,
+            "one line, no trailing newline baked in"
+        );
 
         let rest = line
-            .strip_prefix("{\"state\":\"ok\",\"gateway\":true,\"tor\":true,\"dns\":true,\"timesync\":\"")
+            .strip_prefix(
+                "{\"state\":\"ok\",\"gateway\":true,\"tor\":true,\"dns\":true,\"timesync\":\"",
+            )
             .unwrap_or_else(|| panic!("field order/spelling drifted: {line}"));
         let (timesync, rest) = rest
             .split_once("\",\"checked_unix\":")
@@ -821,7 +853,10 @@ mod tests {
             default_cache_path_for(xdg, 1000),
             PathBuf::from("/run/user/1000/ombra-status.cache")
         );
-        assert_eq!(socket_path_for(None, 42), PathBuf::from("/tmp/ombra-status-42.sock"));
+        assert_eq!(
+            socket_path_for(None, 42),
+            PathBuf::from("/tmp/ombra-status-42.sock")
+        );
         assert_eq!(
             default_cache_path_for(None, 42),
             PathBuf::from("/tmp/ombra-status-42.cache")
@@ -835,9 +870,15 @@ mod tests {
     #[test]
     fn timesync_reads_the_verdict_word_and_never_fails() {
         assert_eq!(timesync_from_content(Some("ok\n")), TimesyncVerdict::Ok);
-        assert_eq!(timesync_from_content(Some("stale\n")), TimesyncVerdict::Stale);
+        assert_eq!(
+            timesync_from_content(Some("stale\n")),
+            TimesyncVerdict::Stale
+        );
         assert_eq!(timesync_from_content(Some("  OK  \n")), TimesyncVerdict::Ok);
-        assert_eq!(timesync_from_content(Some("junk\n")), TimesyncVerdict::Unknown);
+        assert_eq!(
+            timesync_from_content(Some("junk\n")),
+            TimesyncVerdict::Unknown
+        );
         assert_eq!(timesync_from_content(Some("")), TimesyncVerdict::Unknown);
         assert_eq!(timesync_from_content(None), TimesyncVerdict::Unknown);
     }
@@ -897,7 +938,10 @@ mod tests {
         let parsed = parse_snapshot(&line1).expect("a parseable snapshot line");
         assert_eq!(parsed.state, State::Ok);
         assert!(parsed.gateway && parsed.tor && parsed.dns);
-        assert!(line1.ends_with('\n'), "exactly one line, newline-terminated");
+        assert!(
+            line1.ends_with('\n'),
+            "exactly one line, newline-terminated"
+        );
         assert_eq!(line1.lines().count(), 1);
 
         let mut c2 = UnixStream::connect(&path).unwrap();
@@ -923,11 +967,26 @@ mod tests {
     fn probing_is_quick_only_while_warming_up_and_not_ok() {
         let early = Duration::from_secs(10);
         let late = Duration::from_secs(WARMUP_SECS + 1);
-        assert_eq!(probe_interval(State::Unknown, early), Duration::from_secs(WARMUP_RETRY_SECS));
-        assert_eq!(probe_interval(State::Fail, early), Duration::from_secs(WARMUP_RETRY_SECS));
-        assert_eq!(probe_interval(State::Semi, early), Duration::from_secs(WARMUP_RETRY_SECS));
-        assert_eq!(probe_interval(State::Ok, early), Duration::from_secs(CACHE_TTL_SECS));
-        assert_eq!(probe_interval(State::Fail, late), Duration::from_secs(CACHE_TTL_SECS));
+        assert_eq!(
+            probe_interval(State::Unknown, early),
+            Duration::from_secs(WARMUP_RETRY_SECS)
+        );
+        assert_eq!(
+            probe_interval(State::Fail, early),
+            Duration::from_secs(WARMUP_RETRY_SECS)
+        );
+        assert_eq!(
+            probe_interval(State::Semi, early),
+            Duration::from_secs(WARMUP_RETRY_SECS)
+        );
+        assert_eq!(
+            probe_interval(State::Ok, early),
+            Duration::from_secs(CACHE_TTL_SECS)
+        );
+        assert_eq!(
+            probe_interval(State::Fail, late),
+            Duration::from_secs(CACHE_TTL_SECS)
+        );
     }
 
     #[test]
@@ -951,7 +1010,10 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
             rebound = bind_socket(&path);
         }
-        assert!(rebound.is_ok(), "a stale socket file gets cleared: {rebound:?}");
+        assert!(
+            rebound.is_ok(),
+            "a stale socket file gets cleared: {rebound:?}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -984,8 +1046,11 @@ mod tests {
         let running = Arc::new(AtomicBool::new(true));
         let gate = Arc::new(AtomicBool::new(false));
         let server = {
-            let (snapshot, running, gate) =
-                (Arc::clone(&snapshot), Arc::clone(&running), Arc::clone(&gate));
+            let (snapshot, running, gate) = (
+                Arc::clone(&snapshot),
+                Arc::clone(&running),
+                Arc::clone(&gate),
+            );
             let cache = cache.clone();
             std::thread::spawn(move || {
                 daemon_on(

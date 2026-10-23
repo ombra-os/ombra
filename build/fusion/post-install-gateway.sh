@@ -46,6 +46,7 @@ vmx_set ethernet1.startConnected true    # internal net: tor/dnsmasq bind 10.55.
 vmx_set memsize 512
 vmx_set sata0:0.startConnected  false    # keep the install ISO attached but never boot it
 vmx_set bios.bootOrder          "hdd,cdrom"
+vmx_set snapshot.disabled        TRUE      # no snapshots: they keep old disk states and RAM on the host
 
 # install-time debug channels never ship: strip any VNC keys from the vmx
 if grep -qE '^(RemoteDisplay|serial[0-9]+)\.' "$VMX"; then

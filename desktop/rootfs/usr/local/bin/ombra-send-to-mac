@@ -1,0 +1,30 @@
+#!/bin/bash
+set -u
+out=/mnt/transfer/shared
+
+notify() {
+    busctl --user call org.freedesktop.Notifications /org/freedesktop/Notifications \
+        org.freedesktop.Notifications Notify susssasa{sv}i \
+        "Ombra" 0 "$1" "Mac Shared Folder" "$2" 0 0 6000 >/dev/null 2>&1 || true
+}
+
+ls "$out" >/dev/null 2>&1
+if ! mountpoint -q "$out"; then
+    notify dialog-warning "There is no transfer session: the shared folder is not attached."
+    exit 1
+fi
+
+sent=0
+for item in "$@"; do
+    if cp -R --no-preserve=mode,ownership,timestamps -- "$item" "$out/"; then
+        sent=$((sent + 1))
+    fi
+done
+sync -f "$out"
+
+if [ "$sent" -eq "$#" ]; then
+    notify document-export "Copied $sent item(s) into the shared folder. They reach the Mac when the session ends."
+else
+    notify dialog-warning "Copied $sent of $# items. The shared folder may be full."
+    exit 1
+fi

@@ -1,0 +1,3 @@
+#!/bin/sh
+export QT_QPA_PLATFORM=xcb APPDIR=/opt/feather
+exec /opt/feather/usr/bin/feather "$@"

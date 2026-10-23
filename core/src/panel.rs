@@ -6,9 +6,9 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crossterm::ExecutableCommand;
 use crossterm::cursor::{Hide, Show};
 use crossterm::terminal::{Clear, ClearType};
+use crossterm::ExecutableCommand;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -24,8 +24,7 @@ pub const GW: &str = "10.55.10.1";
 pub const SOCKS_ADDR: &str = "10.55.10.1:9050";
 pub const TOR_CHECK_URL: &str = "https://check.torproject.org/api/ip";
 /// A REAL onion — only Tor's DNSPort automaps .onion names (into 10.66.*).
-pub const DNS_PROBE_ONION: &str =
-    "2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion";
+pub const DNS_PROBE_ONION: &str = "2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion";
 pub const CURL_WRAP_TIMEOUT: &str = "45";
 pub const CURL_MAX_TIME: &str = "30";
 pub const DIG_TIME: &str = "12";
@@ -70,7 +69,11 @@ pub struct Section {
 
 impl Section {
     fn new(label: &'static str, verdict: impl Into<String>, state: State) -> Section {
-        Section { label, verdict: verdict.into(), state }
+        Section {
+            label,
+            verdict: verdict.into(),
+            state,
+        }
     }
 }
 
@@ -96,11 +99,9 @@ pub fn dns_section(first_answer: Option<&str>) -> Section {
         Some(a) if !a.is_empty() && a.starts_with("10.66.") => {
             Section::new("dns", "resolves via tor, .onion automaps", State::Ok)
         }
-        Some(a) if !a.is_empty() => Section::new(
-            "dns",
-            "resolves but .onion automap broken",
-            State::Fail,
-        ),
+        Some(a) if !a.is_empty() => {
+            Section::new("dns", "resolves but .onion automap broken", State::Fail)
+        }
         _ => Section::new("dns", "gateway resolver not answering", State::Fail),
     }
 }
@@ -160,7 +161,10 @@ impl Snapshot {
             return ("checking".to_string(), State::Checking);
         }
         match self.fails() {
-            0 => ("all traffic routes through tor (gateway)".to_string(), State::Ok),
+            0 => (
+                "all traffic routes through tor (gateway)".to_string(),
+                State::Ok,
+            ),
             n => (format!("attention - {n} of 3 checks failed"), State::Fail),
         }
     }
@@ -241,14 +245,21 @@ fn socks_probe() -> String {
 fn first_line(s: &str) -> Option<String> {
     let line = s.lines().find(|l| !l.starts_with(';'))?;
     let t = line.trim();
-    if t.is_empty() { None } else { Some(t.to_owned()) }
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_owned())
+    }
 }
 
 pub fn collect_snapshot(runner: &dyn ProbeRunner) -> Snapshot {
     let mut snap = Snapshot::checking();
     snap.apply(ProbeKey::Gateway, gateway_section(runner.ping_gateway()));
     snap.apply(ProbeKey::Tor, tor_section(&runner.tor_body()));
-    snap.apply(ProbeKey::Dns, dns_section(runner.dns_first_answer().as_deref()));
+    snap.apply(
+        ProbeKey::Dns,
+        dns_section(runner.dns_first_answer().as_deref()),
+    );
     snap
 }
 
@@ -260,9 +271,11 @@ pub fn spawn_probes(runner: Arc<dyn ProbeRunner>) -> Receiver<(ProbeKey, Section
         key: ProbeKey,
         job: impl FnOnce() -> Section + Send + 'static,
     ) {
-        let _ = std::thread::Builder::new().name(name.to_string()).spawn(move || {
-            let _ = tx.send((key, job()));
-        });
+        let _ = std::thread::Builder::new()
+            .name(name.to_string())
+            .spawn(move || {
+                let _ = tx.send((key, job()));
+            });
     }
     let r = runner.clone();
     launch(
@@ -272,18 +285,12 @@ pub fn spawn_probes(runner: Arc<dyn ProbeRunner>) -> Receiver<(ProbeKey, Section
         move || gateway_section(r.ping_gateway()),
     );
     let r = runner.clone();
-    launch(
-        tx.clone(),
-        "ombra-probe-tor",
-        ProbeKey::Tor,
-        move || tor_section(&r.tor_body()),
-    );
-    launch(
-        tx,
-        "ombra-probe-dns",
-        ProbeKey::Dns,
-        move || dns_section(runner.dns_first_answer().as_deref()),
-    );
+    launch(tx.clone(), "ombra-probe-tor", ProbeKey::Tor, move || {
+        tor_section(&r.tor_body())
+    });
+    launch(tx, "ombra-probe-dns", ProbeKey::Dns, move || {
+        dns_section(runner.dns_first_answer().as_deref())
+    });
     rx
 }
 
@@ -300,9 +307,19 @@ pub struct PanelLayout {
 impl PanelLayout {
     pub fn row(&self, i: u16) -> Rect {
         if i >= self.stack.height {
-            return Rect { x: self.stack.x, y: self.stack.y, width: 0, height: 0 };
+            return Rect {
+                x: self.stack.x,
+                y: self.stack.y,
+                width: 0,
+                height: 0,
+            };
         }
-        Rect { x: self.stack.x, y: self.stack.y + i, width: self.stack.width, height: 1 }
+        Rect {
+            x: self.stack.x,
+            y: self.stack.y + i,
+            width: self.stack.width,
+            height: 1,
+        }
     }
 }
 
@@ -314,8 +331,18 @@ pub fn layout(area: Rect, with_footer: bool) -> PanelLayout {
     let avail = area.height.saturating_sub(fixed);
     let ring_h = art::ring_height_for(ring_basis(area.height)).min(avail);
     let top = area.y + area.height.saturating_sub(ring_h + fixed) / 2;
-    let ring = Rect { x: area.x, y: top, width: area.width, height: ring_h };
-    let brand = Rect { x: area.x, y: top + ring_h, width: area.width, height: 1 };
+    let ring = Rect {
+        x: area.x,
+        y: top,
+        width: area.width,
+        height: ring_h,
+    };
+    let brand = Rect {
+        x: area.x,
+        y: top + ring_h,
+        width: area.width,
+        height: 1,
+    };
     let stack_y = brand.y.saturating_add(2);
     let stack = Rect {
         x: area.x,
@@ -323,10 +350,19 @@ pub fn layout(area: Rect, with_footer: bool) -> PanelLayout {
         width: area.width,
         height: STACK_H.min(area.bottom().saturating_sub(stack_y)),
     };
-    let footer =
-        Rect { x: area.x, y: stack_y + STACK_H, width: area.width, height: footer_h }
-            .intersection(area);
-    PanelLayout { ring, brand, stack, footer }
+    let footer = Rect {
+        x: area.x,
+        y: stack_y + STACK_H,
+        width: area.width,
+        height: footer_h,
+    }
+    .intersection(area);
+    PanelLayout {
+        ring,
+        brand,
+        stack,
+        footer,
+    }
 }
 
 pub fn draw(f: &mut Frame, snap: &Snapshot, hint: Option<&str>) {
@@ -362,10 +398,18 @@ pub fn draw(f: &mut Frame, snap: &Snapshot, hint: Option<&str>) {
         };
         let line = Line::from(vec![
             Span::styled(format!("{} ", theme::DOT), theme::fg(dot)),
-            Span::styled(format!("{:<width$}", sec.label, width = LABEL_W), theme::fg(theme::LABEL)),
+            Span::styled(
+                format!("{:<width$}", sec.label, width = LABEL_W),
+                theme::fg(theme::LABEL),
+            ),
             Span::styled(sec.verdict.clone(), theme::fg(verdict)),
         ]);
-        let rect = Rect { x, y: row.y, width: row.width, height: 1 };
+        let rect = Rect {
+            x,
+            y: row.y,
+            width: row.width,
+            height: 1,
+        };
         f.render_widget(Paragraph::new(line), rect);
     }
 
@@ -374,7 +418,10 @@ pub fn draw(f: &mut Frame, snap: &Snapshot, hint: Option<&str>) {
         let w = rule_w.min(rule.width);
         let r = theme::center_horiz(rule, w, 1);
         f.render_widget(
-            Paragraph::new(Line::styled(theme::hairline(w as usize), theme::fg(theme::RULE))),
+            Paragraph::new(Line::styled(
+                theme::hairline(w as usize),
+                theme::fg(theme::RULE),
+            )),
             r,
         );
     }
@@ -463,7 +510,11 @@ mod tests {
     }
 
     fn fake_ok() -> Fake {
-        Fake { ping: true, tor: "{\"IsTor\":true,\"IP\":\"185.65.134.72\"}", dns: Some("10.66.72.1") }
+        Fake {
+            ping: true,
+            tor: "{\"IsTor\":true,\"IP\":\"185.65.134.72\"}",
+            dns: Some("10.66.72.1"),
+        }
     }
 
     fn snap_of(f: &Fake) -> Snapshot {
@@ -490,7 +541,10 @@ mod tests {
     #[test]
     fn gateway_verdicts_are_reachable_or_unreachable() {
         let up = gateway_section(true);
-        assert_eq!((up.label, up.verdict.as_str(), up.state), ("gateway", "reachable", State::Ok));
+        assert_eq!(
+            (up.label, up.verdict.as_str(), up.state),
+            ("gateway", "reachable", State::Ok)
+        );
         let down = gateway_section(false);
         assert_eq!(
             (down.label, down.verdict.as_str(), down.state),
@@ -501,13 +555,19 @@ mod tests {
     #[test]
     fn tor_ok_only_on_the_exact_istor_true_substring() {
         let ok = tor_section("{\"IsTor\":true,\"IP\":\"1.2.3.4\"}");
-        assert_eq!((ok.label, ok.verdict.as_str(), ok.state), ("tor", "exiting through tor", State::Ok));
+        assert_eq!(
+            (ok.label, ok.verdict.as_str(), ok.state),
+            ("tor", "exiting through tor", State::Ok)
+        );
         assert_eq!(tor_section("{\"IsTor\":true}").state, State::Ok);
     }
 
     #[test]
     fn tor_fails_on_false_empty_or_spaced_answers() {
-        assert_eq!(tor_section("{\"IsTor\":false}").verdict, "not exiting through tor");
+        assert_eq!(
+            tor_section("{\"IsTor\":false}").verdict,
+            "not exiting through tor"
+        );
         assert_eq!(tor_section("").state, State::Fail);
         assert_eq!(tor_section("{\"IsTor\": true}").state, State::Fail);
     }
@@ -515,7 +575,10 @@ mod tests {
     #[test]
     fn dns_ok_iff_first_answer_automaps_into_10_66() {
         let ok = dns_section(Some("10.66.72.1"));
-        assert_eq!((ok.label, ok.verdict.as_str(), ok.state), ("dns", "resolves via tor, .onion automaps", State::Ok));
+        assert_eq!(
+            (ok.label, ok.verdict.as_str(), ok.state),
+            ("dns", "resolves via tor, .onion automaps", State::Ok)
+        );
         assert_eq!(dns_section(Some("10.66.")).state, State::Ok);
         assert_eq!(dns_section(Some("1.2.3.4")).state, State::Fail);
     }
@@ -525,7 +588,10 @@ mod tests {
         let none = dns_section(None);
         assert_eq!(none.verdict, "gateway resolver not answering");
         assert_eq!(none.state, State::Fail);
-        assert_eq!(dns_section(Some("")).verdict, "gateway resolver not answering");
+        assert_eq!(
+            dns_section(Some("")).verdict,
+            "gateway resolver not answering"
+        );
     }
 
     #[test]
@@ -560,13 +626,19 @@ mod tests {
     fn summary_three_out_of_three_is_pinned() {
         assert_eq!(
             all_ok().summary(),
-            ("all traffic routes through tor (gateway)".to_string(), State::Ok)
+            (
+                "all traffic routes through tor (gateway)".to_string(),
+                State::Ok
+            )
         );
     }
 
     #[test]
     fn summary_counts_failures() {
-        assert_eq!(with_tor_fail(all_ok()).summary().0, "attention - 1 of 3 checks failed");
+        assert_eq!(
+            with_tor_fail(all_ok()).summary().0,
+            "attention - 1 of 3 checks failed"
+        );
         assert_eq!(all_fail().summary().0, "attention - 3 of 3 checks failed");
         assert_eq!(all_fail().summary().1, State::Fail);
     }
@@ -604,7 +676,10 @@ mod tests {
 
     #[test]
     fn first_line_takes_only_the_first_line() {
-        assert_eq!(first_line("10.66.1.2\n10.66.1.3\n"), Some("10.66.1.2".to_string()));
+        assert_eq!(
+            first_line("10.66.1.2\n10.66.1.3\n"),
+            Some("10.66.1.2".to_string())
+        );
         assert_eq!(first_line(""), None);
         assert_eq!(first_line("\n"), None);
         assert_eq!(first_line("  10.66.1.2  \n"), Some("10.66.1.2".to_string()));
@@ -638,8 +713,14 @@ mod tests {
     #[test]
     fn plain_text_failure_shape_is_pinned() {
         let text = plain_text(&with_tor_fail(all_ok()));
-        assert!(text.contains("tor      [fail] not exiting through tor\n"), "{text:?}");
-        assert!(text.contains("attention - 1 of 3 checks failed\n"), "{text:?}");
+        assert!(
+            text.contains("tor      [fail] not exiting through tor\n"),
+            "{text:?}"
+        );
+        assert!(
+            text.contains("attention - 1 of 3 checks failed\n"),
+            "{text:?}"
+        );
         assert!(!text.contains('\x1b'));
         assert!(text.is_ascii());
     }
@@ -655,7 +736,11 @@ mod tests {
         for y in 0..buf.area.height {
             for x in 0..buf.area.width {
                 if buf[(x, y)].symbol() == "@" {
-                    assert_eq!(buf[(x, y)].fg, theme::RING_BRIGHT, "ring cells are two-tone");
+                    assert_eq!(
+                        buf[(x, y)].fg,
+                        theme::RING_BRIGHT,
+                        "ring cells are two-tone"
+                    );
                     n += 1;
                 }
             }
@@ -668,7 +753,10 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 25)).expect("test backend");
         terminal.draw(|f| draw(f, &all_ok(), None)).expect("draw");
         let buf = terminal.backend().buffer().clone();
-        let compact: usize = art::ring_rows(25).iter().map(|l| l.matches('@').count()).sum();
+        let compact: usize = art::ring_rows(25)
+            .iter()
+            .map(|l| l.matches('@').count())
+            .sum();
         assert_eq!(ring_at_cells(&buf), compact, "compact ring fully visible");
         let text = buffer_text(&buf);
         for needle in [
@@ -701,14 +789,21 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(160, 50)).expect("test backend");
         terminal.draw(|f| draw(f, &all_ok(), None)).expect("draw");
         let buf = terminal.backend().buffer().clone();
-        assert_eq!(ring_at_cells(&buf), art::RING_ART.matches('@').count(), "full ring visible");
+        assert_eq!(
+            ring_at_cells(&buf),
+            art::RING_ART.matches('@').count(),
+            "full ring visible"
+        );
     }
 
     #[test]
     fn failing_summaries_render_at_their_counts() {
         let text = render_at(100, 30, &with_tor_fail(all_ok()), None);
         assert!(text.contains("attention - 1 of 3 checks failed"), "{text}");
-        assert!(!text.contains("all traffic routes through tor (gateway)"), "{text}");
+        assert!(
+            !text.contains("all traffic routes through tor (gateway)"),
+            "{text}"
+        );
 
         let text = render_at(100, 30, &all_fail(), None);
         assert!(text.contains("attention - 3 of 3 checks failed"), "{text}");
@@ -719,38 +814,87 @@ mod tests {
     #[test]
     fn checking_panel_renders_grey_checks_and_a_checking_summary() {
         let text = render_at(100, 30, &Snapshot::checking(), None);
-        assert_eq!(text.matches("checking").count(), 4, "three sections + summary:\n{text}");
+        assert_eq!(
+            text.matches("checking").count(),
+            4,
+            "three sections + summary:\n{text}"
+        );
     }
 
     #[test]
     fn watch_hint_renders_as_a_footer() {
-        let text = render_at(100, 30, &all_ok(), Some("refreshing every 30s - ctrl-c to quit"));
-        assert!(text.contains("refreshing every 30s - ctrl-c to quit"), "{text}");
+        let text = render_at(
+            100,
+            30,
+            &all_ok(),
+            Some("refreshing every 30s - ctrl-c to quit"),
+        );
+        assert!(
+            text.contains("refreshing every 30s - ctrl-c to quit"),
+            "{text}"
+        );
     }
 
     #[test]
     fn tiny_and_narrow_terminals_do_not_panic() {
         let text = render_at(20, 6, &all_ok(), None);
         assert!(text.contains("reachable"), "{text}");
-        let text = render_at(30, 25, &snap_of(&Fake {
-            ping: true,
-            tor: "{\"IsTor\":false}",
-            dns: Some("93.184.216.34"),
-        }), None);
+        let text = render_at(
+            30,
+            25,
+            &snap_of(&Fake {
+                ping: true,
+                tor: "{\"IsTor\":false}",
+                dns: Some("93.184.216.34"),
+            }),
+            None,
+        );
         assert!(text.contains("gateway"), "{text}");
     }
 
     #[test]
     fn layout_is_pinned_at_the_common_sizes() {
         let l = layout(Rect::new(0, 0, 80, 25), false);
-        assert_eq!(l.ring, Rect { x: 0, y: 3, width: 80, height: 12 });
-        assert_eq!(l.brand, Rect { x: 0, y: 15, width: 80, height: 1 });
-        assert_eq!(l.stack, Rect { x: 0, y: 17, width: 80, height: 5 });
+        assert_eq!(
+            l.ring,
+            Rect {
+                x: 0,
+                y: 3,
+                width: 80,
+                height: 12
+            }
+        );
+        assert_eq!(
+            l.brand,
+            Rect {
+                x: 0,
+                y: 15,
+                width: 80,
+                height: 1
+            }
+        );
+        assert_eq!(
+            l.stack,
+            Rect {
+                x: 0,
+                y: 17,
+                width: 80,
+                height: 5
+            }
+        );
         assert_eq!(l.row(4).y, 21, "summary row");
         assert_eq!(l.footer.height, 0, "no hint, no footer");
 
         let tall = layout(Rect::new(0, 0, 160, 50), true);
-        assert_eq!(tall.ring, Rect { x: 0, y: 9, width: 160, height: 23 });
+        assert_eq!(
+            tall.ring,
+            Rect {
+                x: 0,
+                y: 9,
+                width: 160,
+                height: 23
+            }
+        );
         assert_eq!(tall.brand.y, 32);
         assert_eq!(tall.stack.y, 34);
         assert_eq!(tall.footer.y, tall.stack.y + 5);
@@ -783,7 +927,10 @@ mod tests {
         let s = String::from_utf8(w).expect("utf8");
         assert!(s.contains("\x1b[?25h"), "cursor show: {s:?}");
         assert!(!s.contains("\x1b[2J"), "restore must not clear: {s:?}");
-        assert!(!s.contains("1049"), "restore must not leave an alt screen: {s:?}");
+        assert!(
+            !s.contains("1049"),
+            "restore must not leave an alt screen: {s:?}"
+        );
     }
 
     #[test]
@@ -794,6 +941,10 @@ mod tests {
         let s = String::from_utf8(w).expect("utf8");
         assert_eq!(s.matches("\x1b[?25l").count(), 1);
         assert_eq!(s.matches("\x1b[?25h").count(), 1);
-        assert_eq!(s.matches("\x1b[2J").count(), 1, "cleared once, on entry only");
+        assert_eq!(
+            s.matches("\x1b[2J").count(),
+            1,
+            "cleared once, on entry only"
+        );
     }
 }

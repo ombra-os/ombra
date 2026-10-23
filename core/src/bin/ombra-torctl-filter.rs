@@ -5,8 +5,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -162,6 +162,7 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
         .peer_addr()
         .map(|a| a.to_string())
         .unwrap_or_else(|_| "?".into());
+    let peer_ip = client.peer_addr().map(|a| a.ip()).ok();
     let mut client = client;
     let _ = client.set_nodelay(true);
     // pre-auth reads are bounded; the session lifts the bound once the cookie lands
@@ -169,7 +170,12 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
 
     let upstream = match TcpStream::connect(&cfg.upstream) {
         Ok(s) => s,
-        Err(e) => return refuse_close(client, &format!("551 ombra-filter: tor control unreachable ({e})")),
+        Err(e) => {
+            return refuse_close(
+                client,
+                &format!("551 ombra-filter: tor control unreachable ({e})"),
+            )
+        }
     };
     let _ = upstream.set_nodelay(true);
     let cookie = match std::fs::read(&cfg.cookie_file) {
@@ -177,13 +183,16 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
         _ => return refuse_close(client, "551 ombra-filter: cannot read tor control cookie"),
     };
     if let Err(e) = upstream_auth(&upstream, &cookie) {
-        return refuse_close(client, &format!("551 ombra-filter: upstream auth failed ({e})"));
+        return refuse_close(
+            client,
+            &format!("551 ombra-filter: upstream auth failed ({e})"),
+        );
     }
     let mut upstream_writer = try_clone(&upstream);
 
     let mut reader = BufReader::new(try_clone(&client));
     let mut line: Vec<u8> = Vec::new();
-        // break = authenticated; return = client gone, stalled, or failed the cookie
+    // break = authenticated; return = client gone, stalled, or failed the cookie
     loop {
         match torctl::read_line_capped(&mut reader, &mut line, limits.line_cap) {
             Err(torctl::LineReadError::TooLong) => {
@@ -206,7 +215,7 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
                 return;
             }
             "PROTOCOLINFO" => {
-                let _ = upstream_writer.write_all(&line);
+                let _ = client.write_all(torctl::PROTOCOLINFO_REPLY.as_bytes());
             }
             "AUTHENTICATE" => {
                 if torctl::client_auth_ok(cmd) {
@@ -227,16 +236,19 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
     }
 
     let _ = client.set_read_timeout(limits.idle_timeout);
+    let mut onion_adds: u32 = 0;
     let to_client = try_clone(&client);
     thread::spawn(move || {
         let mut inp = BufReader::new(try_clone(&upstream));
         let mut out = to_client;
+        let mut filter = torctl::DownstreamFilter::new();
         let mut buf = [0u8; 4096];
         loop {
             match inp.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if out.write_all(&buf[..n]).is_err() {
+                    let pass = filter.feed(&buf[..n]);
+                    if !pass.is_empty() && out.write_all(&pass).is_err() {
                         break;
                     }
                 }
@@ -261,10 +273,64 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
         if cmd.is_empty() {
             continue;
         }
-        let (verb, _) = verb_split(cmd);
+        let (verb, rest) = verb_split(cmd);
+        if verb == "ADD_ONION" {
+            let rewritten = peer_ip
+                .filter(|_| onion_adds < torctl::MAX_ADD_ONION)
+                .and_then(|ip| torctl::add_onion_rewrite(rest, ip));
+            let Some(forward) = rewritten else {
+                let _ = client.write_all(format!("{}\r\n", torctl::refusal(cmd, true)).as_bytes());
+                eprintln!("ombra-torctl-filter: {peer} ADD_ONION refused");
+                continue;
+            };
+            onion_adds += 1;
+            eprintln!("ombra-torctl-filter: {peer} ADD_ONION accepted");
+            if upstream_writer
+                .write_all(format!("{forward}\r\n").as_bytes())
+                .is_err()
+            {
+                break;
+            }
+            continue;
+        }
+        if verb == "SETEVENTS" {
+            match torctl::setevents_plan(rest) {
+                Some(None) => {
+                    if client.write_all(b"250 OK\r\n").is_err() {
+                        break;
+                    }
+                }
+                Some(Some(forward)) => {
+                    if upstream_writer
+                        .write_all(format!("{forward}\r\n").as_bytes())
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                None => {
+                    let _ =
+                        client.write_all(format!("{}\r\n", torctl::refusal(cmd, true)).as_bytes());
+                    eprintln!(
+                        "ombra-torctl-filter: {peer} command refused: {}",
+                        torctl::loggable(cmd)
+                    );
+                }
+            }
+            continue;
+        }
+        if let Some(reply) = torctl::stub_reply(cmd, true) {
+            if client.write_all(reply.as_bytes()).is_err() {
+                break;
+            }
+            continue;
+        }
         if !torctl::command_allowed(cmd, true) {
             let _ = client.write_all(format!("{}\r\n", torctl::refusal(cmd, true)).as_bytes());
-            eprintln!("ombra-torctl-filter: {peer} command refused");
+            eprintln!(
+                "ombra-torctl-filter: {peer} command refused: {}",
+                torctl::loggable(cmd)
+            );
             continue;
         }
         if upstream_writer.write_all(&line).is_err() {
@@ -423,12 +489,16 @@ mod tests {
         let n = c.read(&mut buf).unwrap();
         assert!(contains(&buf[..n], b"250"));
         thread::sleep(Duration::from_millis(600));
-        c.set_read_timeout(Some(Duration::from_millis(300))).unwrap();
+        c.set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
         match c.read(&mut buf) {
             Ok(0) => panic!("the session was closed for being idle"),
             Ok(_) => {}
             Err(e) => assert!(
-                matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut),
+                matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ),
                 "{e}"
             ),
         }
@@ -448,8 +518,15 @@ mod tests {
         idle.write_all(b"AUTHENTICATE\r\n").unwrap();
         let start = std::time::Instant::now();
         let reply = read_all(&mut idle);
-        assert!(contains(&reply, b"250 OK"), "{:?}", String::from_utf8_lossy(&reply));
-        assert!(start.elapsed() < Duration::from_secs(4), "idle session was not closed");
+        assert!(
+            contains(&reply, b"250 OK"),
+            "{:?}",
+            String::from_utf8_lossy(&reply)
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(4),
+            "idle session was not closed"
+        );
         thread::sleep(Duration::from_millis(200));
         let mut next = TcpStream::connect(addr).unwrap();
         next.write_all(b"AUTHENTICATE\r\n").unwrap();

@@ -132,6 +132,24 @@ run() {
 
 pin() { awk -F= -v k="$2" '$1==k{print substr($0, index($0,"=")+1)}' "$1"; }
 
+fetch_pinned() {  # $1 pin name, $2 label
+  local name="$1" label="$2" url archive file want base
+  url="$(pin "build/pins/$name.txt" url)"
+  archive="$(pin "build/pins/$name.txt" archive_url)"
+  file="$(pin "build/pins/$name.txt" file)"
+  want="$(pin "build/pins/$name.txt" sha256)"
+  if [ -f "build/vendor/$file" ] && [ "$(shasum -a 256 "build/vendor/$file" | awk '{print $1}')" = "$want" ]; then
+    ok "$label already verified"
+  else
+    say "  downloading $file"
+    for base in "$url" "$archive"; do
+      curl -fL --retry 3 -o "build/vendor/$file" "${base}${file}" && break
+    done
+    [ "$(shasum -a 256 "build/vendor/$file" | awk '{print $1}')" = "$want" ] || die "$label failed its checksum"
+    ok "$label verified"
+  fi
+}
+
 fetch_pins() {
   step "Fetching the pinned downloads"
   local filename version want file url
@@ -151,21 +169,9 @@ fetch_pins() {
     bash build/verify-iso.sh >/dev/null || die "the Debian installer failed its checksum"
     ok "Debian installer verified"
   fi
-  url="$(pin build/pins/torbrowser.txt url)"
-  archive="$(pin build/pins/torbrowser.txt archive_url)"
-  file="$(pin build/pins/torbrowser.txt file)"
-  want="$(pin build/pins/torbrowser.txt sha256)"
-  if [ -f "build/vendor/$file" ] && [ "$(shasum -a 256 "build/vendor/$file" | awk '{print $1}')" = "$want" ]; then
-    ok "Tor Browser already verified"
-  else
-    say "  downloading $file"
-    local tbase
-    for tbase in "$url" "$archive"; do
-      curl -fL --retry 3 -o "build/vendor/$file" "${tbase}${file}" && break
-    done
-    [ "$(shasum -a 256 "build/vendor/$file" | awk '{print $1}')" = "$want" ] || die "Tor Browser failed its checksum"
-    ok "Tor Browser verified"
-  fi
+  fetch_pinned torbrowser "Tor Browser"
+  fetch_pinned feather "Feather"
+  fetch_pinned simplex "SimpleX"
 }
 
 build_isos() {

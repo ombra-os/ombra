@@ -38,6 +38,10 @@ PlasmoidItem {
     property string statusText: errorTooltip
     property var detail: null
 
+    // update notice (tooltip only): the root-owned boot-time check writes "available" and the version to /run/ombra/update
+    property string updateVersion: ""
+    readonly property string updateCommand: "/usr/bin/head -n 2 /run/ombra/update"
+
     // dot size from gridUnit — FontMetrics.height can arrive NaN at
     // item creation (Math.max(8, NaN) = NaN = a dot that never draws),
     // and gridUnit is always a plain number
@@ -47,7 +51,9 @@ PlasmoidItem {
     switchHeight: Kirigami.Units.gridUnit * 8
 
     toolTipMainText: "Ombra Tor Status"
-    toolTipSubText: root.statusText
+    toolTipSubText: root.updateVersion !== ""
+        ? root.statusText + "\nOmbra " + root.updateVersion + " is available. Open Update Ombra from the application menu."
+        : root.statusText
 
     P5Support.DataSource {
         id: statusSource
@@ -58,6 +64,20 @@ PlasmoidItem {
         connectedSources: [root.statusCommand]
         onNewData: (source, data) => {
             root.ingest(data["stdout"]);
+        }
+    }
+
+    P5Support.DataSource {
+        id: updateSource
+
+        engine: "executable"
+        interval: 60000
+        connectedSources: [root.updateCommand]
+        onNewData: (source, data) => {
+            const lines = String(data["stdout"] || "").trim().split("\n");
+            const ver = (lines.length > 1 ? lines[1] : "").trim();
+            // only a plain version string is ever shown
+            root.updateVersion = (lines[0].trim() === "available" && /^[0-9][0-9A-Za-z.+~-]{0,30}$/.test(ver)) ? ver : "";
         }
     }
 

@@ -28,7 +28,10 @@ impl AskRequest {
     /// systemd-cryptsetup's volume request: `Id=cryptsetup:...` or its "passphrase for disk" message.
     pub fn is_disk_unlock(&self) -> bool {
         self.id.starts_with("cryptsetup:")
-            || self.message.to_ascii_lowercase().contains("passphrase for disk")
+            || self
+                .message
+                .to_ascii_lowercase()
+                .contains("passphrase for disk")
     }
 }
 
@@ -53,7 +56,12 @@ pub fn parse_ask(text: &str, path: &Path) -> Option<AskRequest> {
     let socket = socket?;
     let id = id.or_else(|| path.file_stem()?.to_str().map(str::to_string))?;
     let message = message.or(name).unwrap_or_default();
-    Some(AskRequest { path: path.to_path_buf(), id, message, socket })
+    Some(AskRequest {
+        path: path.to_path_buf(),
+        id,
+        message,
+        socket,
+    })
 }
 
 /// All answerable requests in `dir`, oldest first; a missing directory is an empty set.
@@ -80,8 +88,8 @@ pub fn scan(dir: &Path) -> Result<Vec<AskRequest>> {
 }
 
 pub fn write_answer(socket: &Path, password: &[u8]) -> Result<()> {
-    let meta = fs::metadata(socket)
-        .with_context(|| format!("answer channel {}", socket.display()))?;
+    let meta =
+        fs::metadata(socket).with_context(|| format!("answer channel {}", socket.display()))?;
     let to_socket = meta.file_type().is_socket();
     let mut frame = packet_for_channel(to_socket, password);
     let sent = write_channel_bounded(socket, to_socket, &frame);
@@ -139,7 +147,8 @@ mod tests {
     use std::io::Read;
 
     fn tempdir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ombra-askpass-test-{tag}-{}", std::process::id()));
+        let d =
+            std::env::temp_dir().join(format!("ombra-askpass-test-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
@@ -157,8 +166,14 @@ PID=412
     fn parses_real_format_ask_file() {
         let path = PathBuf::from("/run/systemd/ask-password/u0000000101.ask");
         let req = parse_ask(FIXTURE, &path).expect("parses");
-        assert_eq!(req.socket, PathBuf::from("/run/systemd/ask-password/sck.29217"));
-        assert_eq!(req.message, "Please enter passphrase for disk ombra (nvme0n1p3)!");
+        assert_eq!(
+            req.socket,
+            PathBuf::from("/run/systemd/ask-password/sck.29217")
+        );
+        assert_eq!(
+            req.message,
+            "Please enter passphrase for disk ombra (nvme0n1p3)!"
+        );
         assert_eq!(req.id, "u0000000101");
         assert_eq!(req.path, path);
     }
@@ -178,9 +193,14 @@ PID=412
         let p = Path::new("/run/systemd/ask-password/ask.X.ask");
         let disk = parse_ask(FIXTURE, p).unwrap();
         assert!(disk.is_disk_unlock());
-        let by_id = parse_ask("Id=cryptsetup:/dev/sda3\nMessage=Enter key\nSocket=/run/s\n", p).unwrap();
+        let by_id = parse_ask(
+            "Id=cryptsetup:/dev/sda3\nMessage=Enter key\nSocket=/run/s\n",
+            p,
+        )
+        .unwrap();
         assert!(by_id.is_disk_unlock());
-        let other = parse_ask("Id=sudo:1\nMessage=Password for admin:\nSocket=/run/s\n", p).unwrap();
+        let other =
+            parse_ask("Id=sudo:1\nMessage=Password for admin:\nSocket=/run/s\n", p).unwrap();
         assert!(!other.is_disk_unlock());
         let bare = parse_ask("Socket=/run/s\n", p).unwrap();
         assert!(!bare.is_disk_unlock());
@@ -209,7 +229,8 @@ PID=412
     #[test]
     fn answer_is_the_plus_framed_datagram_to_a_socket_channel() {
         // AF_UNIX paths are capped (~104B on macOS): keep this under /tmp.
-        let dir = PathBuf::from("/tmp").join(format!("ombra-askpass-test-sock-{}", std::process::id()));
+        let dir =
+            PathBuf::from("/tmp").join(format!("ombra-askpass-test-sock-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let sock_path = dir.join("sck.9");
@@ -258,7 +279,11 @@ PID=412
     fn fifo_with_no_listener_times_out_instead_of_hanging() {
         let dir = tempdir("nolistener");
         let fifo = dir.join("sck.2");
-        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
         let res = write_answer(&fifo, b"nobody-there");
         assert!(res.is_err(), "expected a timeout error, got {res:?}");
         let _ = fs::remove_dir_all(&dir);

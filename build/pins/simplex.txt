@@ -1,0 +1,12 @@
+# SimpleX Chat desktop — upstream .deb, arm64 (built on Ubuntu 24.04; bundles its own Java runtime).
+# Provenance: upstream's signed checksum list (_sha256sums, signed by "SimpleX Build (Key for signing releases)
+# <build@simplex.chat>", fingerprint BBDF7BDAD1548B16836AF5B9D53BDFD153C366BA) covers x86_64 files ONLY. The arm64
+# desktop build has no upstream signature. This pin is the sha256 of the release asset as served by GitHub on 2026-10-22,
+# which matches the digest GitHub records for that asset. It proves the file did not change since; it does not prove who built it.
+version=7.0.3
+file=simplex-desktop-ubuntu-24_04-aarch64.deb
+sha256=3720c2428952e53d39b8cd4c76dd8e801e182bba4e40b2010786a6e465153b4e
+signature=none-for-arm64
+license=AGPL-3.0
+url=https://github.com/simplex-chat/simplex-chat/releases/download/v7.0.3/
+archive_url=https://github.com/simplex-chat/simplex-chat/releases/download/v7.0.3/

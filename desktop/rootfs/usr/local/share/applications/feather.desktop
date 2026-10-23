@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Feather Wallet
+GenericName=Monero Wallet
+Comment=Monero wallet, connected through Tor
+Exec=/usr/local/bin/feather
+Icon=/opt/feather/feather.png
+Terminal=false
+Categories=Network;
+StartupNotify=false
+StartupWMClass=feather
+Keywords=monero;xmr;crypto;currency

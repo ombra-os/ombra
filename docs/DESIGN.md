@@ -43,7 +43,7 @@ topology plus the gateway firewall is the product.
 |---|---|---|
 | 1 | The desktop has no direct network path | One NIC on a private link; no NAT, second adapter or bridge, ever. The link is shared with the host adapter and any other attached VM, so the guarantee is the single NIC plus the gateway firewall |
 | 2 | The gateway is fail-closed | Outbound allowed only for the Tor uid; DNS only through Tor; if Tor dies the desktop has no network |
-| 3 | Nothing fetches at install, boot or runtime | Debian packages from the pinned suite; everything else vendored with source, tag, hash and license recorded |
+| 3 | Nothing fetches at install or boot; the only runtime fetches are the signed update index and a user-started update, both through Tor | Debian packages from the pinned suite; everything else vendored with source, tag, hash and license recorded |
 | 4 | Generic guest identity | Fixed hostnames and machine-id; nothing derived from the user, the Mac or the build host |
 | 5 | No version numbers on human surfaces | The machine calls itself "Ombra"; versions appear only in machine-readable fields |
 | 6 | The disk is the state | No persistent stamps: first-use re-proves its precondition against the LUKS header every boot; the completion marker lives on tmpfs |
@@ -58,7 +58,7 @@ topology plus the gateway firewall is the product.
 | `.onion` | Automap into 10.66.0.0/16; SOCKS-aware apps pass hostnames to Tor |
 | TCP | Gateway redirects every desktop TCP connection into Tor's TransPort |
 | Tor | Stock Debian `tor` under its own uid; firewall permits outbound for that uid only |
-| Control port | Read-only filter, own unprivileged user, loopback-only egress; status GETINFOs and events only; no signal, reconfigure or destination relay |
+| Control port | Filter on its own unprivileged user, loopback-only egress; read-only status plus one write: `ADD_ONION` with a restricted grammar, for OnionShare. Targets are rewritten to the desktop and limited to ports 17600-17659, at most 8 services per connection; no signal, reconfigure or arbitrary destination |
 | IPv6 | Gateway: kernel parameter, sysctl, systemd-networkd, nft drop. Desktop: sysctl, NetworkManager, nft |
 | Clock | `ombra-timesync` every 30 min: HTTPS Date headers from three sites through Tor, 2-of-3 consensus, no change on disagreement |
 | Host time sync | Off in both VMs |
@@ -83,7 +83,7 @@ disarmed). The menu waits for a choice.
 
 | Property | Value |
 |---|---|
-| Mechanism | `overlayroot` initramfs hook; independent of the hypervisor disk mode, so it survives OVA import |
+| Mechanism | `overlayroot` initramfs hook; independent of the hypervisor disk mode, so it does not depend on how the image is imported |
 | Override | A kernel `overlayroot=` parameter beats `/etc/overlayroot.conf` |
 | Command line | Every entry carries the full hardened line (`ipv6.disable=1` on the gateway) |
 | RAM limit | tmpfs is half of RAM: about 230 MB gateway, about 3 GB desktop; large amnesic downloads fill it and writes fail |
@@ -124,9 +124,11 @@ disarmed). The menu waits for a choice.
 | Privacy floor | No telemetry, Baloo off, no Discover, no KDE Connect, no networked widgets, clipboard history off |
 | Status LED | `org.ombra.status` shows the Tor verdict from the status daemon; never network content |
 | Host channels | vmx keys disable copy/paste, drag-and-drop and shared folders; the guest also removes the drag-and-drop and hgfs plugins; display auto-fit stays |
+| Transfer disk | When a shared-folder disk is attached to the desktop VM it appears as one extra disk, labelled `OMBRA-SHARE`, and no network. A fixed systemd mount puts it at `/mnt/transfer/shared` (`vfat`, `sync,flush`, `noexec,nosuid,nodev`); the `udf` driver stays blacklisted. Dolphin's sidebar lists one place, Mac Shared Folder, the raw device is hidden from udisks, and a right-click Copy to Mac Shared Folder works from anywhere |
 | Browser | Tor Browser (alpha channel, the only one with linux-aarch64 builds) wrapped to use the gateway's SOCKS port; updater disabled |
-| Passwords | KeePassXC; no crypto wallet ships |
-| Updates | Packages frozen at the release image; updates arrive as new images |
+| Privacy applications | Kleopatra (OpenPGP, keyserver traffic only through Tor), OnionShare, Electrum, Feather and SimpleX; each is pinned or from the frozen Debian suite and is pointed at the gateway SOCKS port by shipped presets. Feather and SimpleX are vendored at a pinned hash and never fetch or update themselves. Tor services bundled by an application are disabled: the desktop has no tor daemon, and `ombra-socks` forwards the loopback SOCKS port that applications expect to the gateway |
+| Passwords | KeePassXC |
+| Updates | Signed in-place updates fetched through Tor on request (see [UPDATES.md](UPDATES.md)); the desktop snapshots root first, the gateway keeps replaced files; Amnesic mode cannot update |
 
 ## Build and supply chain
 

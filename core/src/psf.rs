@@ -106,16 +106,12 @@ impl PsfFont {
             return Err("glyph cell taller than the kernel's 32-row limit");
         }
         let glyphs_bytes = glyph_count * glyph_bytes;
-        let glyphs = rest
-            .get(..glyphs_bytes)
-            .ok_or("truncated glyph data")?;
+        let glyphs = rest.get(..glyphs_bytes).ok_or("truncated glyph data")?;
         if mode & PSF1_MODEHASTAB == 0 {
             // a mapless 512-glyph swap is how ASCII breaks; refuse the font
             return Err("font has no embedded Unicode table");
         }
-        let table = rest
-            .get(glyphs_bytes..)
-            .ok_or("truncated Unicode table")?;
+        let table = rest.get(glyphs_bytes..).ok_or("truncated Unicode table")?;
         let map = parse_unimap(table, glyph_count)?;
         Ok(PsfFont {
             width: 8,
@@ -129,7 +125,11 @@ impl PsfFont {
 
     /// Test-facing glyph lookup (coverage tests check shapes, not just map presence).
     pub fn glyph_for(&self, unicode: u16) -> Option<&[u8]> {
-        let pos = self.map.iter().find(|&&(_, u)| u == unicode).map(|&(p, _)| p)?;
+        let pos = self
+            .map
+            .iter()
+            .find(|&&(_, u)| u == unicode)
+            .map(|&(p, _)| p)?;
         let start = pos as usize * self.glyph_bytes;
         self.glyphs.get(start..start + self.glyph_bytes)
     }
@@ -253,7 +253,10 @@ pub fn load(console_fd: RawFd) -> Result<String, String> {
         if rc >= 0 {
             return Ok(format!(
                 "boot font Terminus {}x{} loaded ({} glyphs, {} map entries)",
-                font.width, font.height, count, pairs.len()
+                font.width,
+                font.height,
+                count,
+                pairs.len()
             ));
         }
         let e = io::Error::last_os_error();
@@ -314,7 +317,10 @@ mod tests {
         assert!(blank_rows(0x2570, 8..16), "U+2570 has ink below the curve");
         assert!(blank_rows(0x256F, 8..16), "U+256F has ink below the curve");
         let caret = f.glyph_for(0x2588).expect("caret glyph");
-        assert!(caret.iter().all(|&b| b == 0xFF), "caret is not a full block");
+        assert!(
+            caret.iter().all(|&b| b == 0xFF),
+            "caret is not a full block"
+        );
         let dot_ink = f
             .glyph_for(0x00B7)
             .expect("mask glyph")
@@ -333,7 +339,10 @@ mod tests {
 
         let mut bad_magic = good.to_vec();
         bad_magic[0] = 0x37;
-        assert_eq!(PsfFont::parse(&bad_magic), Err("not a PSF1 font (bad magic)"));
+        assert_eq!(
+            PsfFont::parse(&bad_magic),
+            Err("not a PSF1 font (bad magic)")
+        );
 
         let mut bad_mode = good.to_vec();
         bad_mode[2] = 0x08;
@@ -348,7 +357,10 @@ mod tests {
 
         let mut no_tab = good.to_vec();
         no_tab[2] ^= PSF1_MODEHASTAB;
-        assert_eq!(PsfFont::parse(&no_tab), Err("font has no embedded Unicode table"));
+        assert_eq!(
+            PsfFont::parse(&no_tab),
+            Err("font has no embedded Unicode table")
+        );
 
         let table_end = good.len();
         let cut_table = &good[..table_end - 2];

@@ -289,7 +289,9 @@ impl Welcome {
             }
             Screen::Resume => {
                 match self.resume_field.handle_key(key) {
-                    FieldEvent::Submitted if self.resume_field.value() == crate::BUILD_PASSPHRASE => {
+                    FieldEvent::Submitted
+                        if self.resume_field.value() == crate::BUILD_PASSPHRASE =>
+                    {
                         self.note = Some((
                             "that is the public build passphrase - choose your own".to_string(),
                             Severity::Bad,
@@ -337,7 +339,11 @@ impl Welcome {
         self.user_secret = None;
         self.resume_field.clear();
         self.resume_secret = None;
-        self.screen = if self.resuming { Screen::Resume } else { Screen::DiskPassphrase };
+        self.screen = if self.resuming {
+            Screen::Resume
+        } else {
+            Screen::DiskPassphrase
+        };
         self.note = Some((detail.to_string(), Severity::Bad));
     }
 
@@ -360,15 +366,24 @@ impl Default for Welcome {
 pub fn draw(f: &mut Frame, app: &Welcome) {
     let area = f.area();
     let l = theme::layout(area);
-    f.render_widget(art::Ring::for_console(l.ring.height.max(area.height.min(40))), l.ring);
+    f.render_widget(
+        art::Ring::for_console(l.ring.height.max(area.height.min(40))),
+        l.ring,
+    );
     theme::put_wordmark(f, l.brand, theme::FIELD_WIDTH);
-    if !matches!(app.screen(), Screen::DiskPassphrase | Screen::UserPassword | Screen::Resume) {
+    if !matches!(
+        app.screen(),
+        Screen::DiskPassphrase | Screen::UserPassword | Screen::Resume
+    ) {
         theme::put_centered(f, l.title, app.screen().title(), theme::fg(theme::LABEL));
     }
 
     // field screens need the full content height: no footer band
     let mut c = l.content;
-    if matches!(app.screen(), Screen::DiskPassphrase | Screen::UserPassword | Screen::Resume) {
+    if matches!(
+        app.screen(),
+        Screen::DiskPassphrase | Screen::UserPassword | Screen::Resume
+    ) {
         c.height = area.bottom().saturating_sub(c.y);
     }
     match app.screen() {
@@ -390,14 +405,29 @@ pub fn draw(f: &mut Frame, app: &Welcome) {
             // title left-aligned to the input box's edge
             let field = theme::center_horiz(c, theme::FIELD_WIDTH, 3);
             let title = app.screen().title();
-            theme::put_left(f, theme::line_rect(c, field.x, c.y), title, theme::fg(theme::TEXT));
-            let box1 = ratatui::layout::Rect { x: field.x, y: c.y + 1, width: field.width, height: 3 };
+            theme::put_left(
+                f,
+                theme::line_rect(c, field.x, c.y),
+                title,
+                theme::fg(theme::TEXT),
+            );
+            let box1 = ratatui::layout::Rect {
+                x: field.x,
+                y: c.y + 1,
+                width: field.width,
+                height: 3,
+            };
             f.render_widget(app.active_flow().first_field(), box1);
             let mut row = c.y + 4;
 
             // the second box spawns below once the first is accepted
             if app.active_flow().on_second() {
-                let second = ratatui::layout::Rect { x: field.x, y: row, width: field.width, height: 3 };
+                let second = ratatui::layout::Rect {
+                    x: field.x,
+                    y: row,
+                    width: field.width,
+                    height: 3,
+                };
                 f.render_widget(app.active_flow().second_field(), second);
                 row += 3;
             }
@@ -412,8 +442,13 @@ pub fn draw(f: &mut Frame, app: &Welcome) {
                 row += 1;
             } else if !app.active_flow().on_second() {
                 let info = match app.screen() {
-                    Screen::DiskPassphrase => theme::dotted_line(&["LUKS2", "AES-256-XTS", "argon2id"]),
-                    _ => Line::styled("the password for the account \"ombra\"", theme::fg(theme::LABEL)),
+                    Screen::DiskPassphrase => {
+                        theme::dotted_line(&["LUKS2", "AES-256-XTS", "argon2id"])
+                    }
+                    _ => Line::styled(
+                        "the password for the account \"ombra\"",
+                        theme::fg(theme::LABEL),
+                    ),
                 };
                 theme::put_line(f, theme::line_rect(c, field.x, row), info);
             }
@@ -423,14 +458,23 @@ pub fn draw(f: &mut Frame, app: &Welcome) {
                     Severity::Muted => theme::MUTED,
                 };
                 let note = theme::truncate(note, field.width as usize);
-                theme::put_left(f, theme::line_rect(c, field.x, row + 1), &note, theme::fg(color));
+                theme::put_left(
+                    f,
+                    theme::line_rect(c, field.x, row + 1),
+                    &note,
+                    theme::fg(color),
+                );
             }
         }
         Screen::Summary => {
             theme::put_line_centered(
                 f,
                 theme::row_in(c, 0),
-                theme::status_line(theme::GOOD, "Your system will restart now.", theme::fg(theme::TEXT)),
+                theme::status_line(
+                    theme::GOOD,
+                    "Your system will restart now.",
+                    theme::fg(theme::TEXT),
+                ),
             );
             theme::put_centered(
                 f,
@@ -448,22 +492,50 @@ pub fn draw(f: &mut Frame, app: &Welcome) {
                 "enter your passphrase to finish encrypting your disk",
                 theme::fg(theme::TEXT),
             );
-            let box1 = ratatui::layout::Rect { x: field.x, y: c.y + 1, width: field.width, height: 3 };
+            let box1 = ratatui::layout::Rect {
+                x: field.x,
+                y: c.y + 1,
+                width: field.width,
+                height: 3,
+            };
             f.render_widget(app.resume_field(), box1);
             let (msg, color) = match app.note() {
                 Some((m, Severity::Bad)) => (m, theme::BAD),
                 Some((m, Severity::Muted)) => (m, theme::MUTED),
-                None => ("the last setup was interrupted - this picks it up", theme::MUTED),
+                None => (
+                    "the last setup was interrupted - this picks it up",
+                    theme::MUTED,
+                ),
             };
             let msg = theme::truncate(msg, field.width as usize);
-            theme::put_left(f, theme::line_rect(c, field.x, c.y + 4), &msg, theme::fg(color));
+            theme::put_left(
+                f,
+                theme::line_rect(c, field.x, c.y + 4),
+                &msg,
+                theme::fg(color),
+            );
         }
         Screen::Applying => {
             let dot: String = app.pulse().to_string();
-            theme::put_centered(f, theme::row_in(c, 0), "making a new key for your disk and re-encrypting it", theme::fg(theme::TEXT));
-            theme::put_centered(f, theme::row_in(c, 1), "this takes a while", theme::fg(theme::LABEL));
+            theme::put_centered(
+                f,
+                theme::row_in(c, 0),
+                "making a new key for your disk and re-encrypting it",
+                theme::fg(theme::TEXT),
+            );
+            theme::put_centered(
+                f,
+                theme::row_in(c, 1),
+                "this takes a while",
+                theme::fg(theme::LABEL),
+            );
             theme::put_centered(f, theme::row_in(c, 3), &dot, theme::fg(theme::RING_DIM));
-            theme::put_centered(f, theme::row_in(c, 5), "do not power off or restart", theme::fg(theme::AMBER));
+            theme::put_centered(
+                f,
+                theme::row_in(c, 5),
+                "do not power off or restart",
+                theme::fg(theme::AMBER),
+            );
         }
         Screen::NeedsPersistent => {
             theme::put_centered(
@@ -550,13 +622,20 @@ impl Applier for SystemApplier {
         let luks = discover_luks()?;
         let _newkey = KeyFileGuard::write(NEW_KEYFILE, passphrase.as_bytes())?;
         let out = tool("cryptsetup")
-            .args(reencrypt_args(&luks.mapping, &luks.device, user_key_slot(&luks.device)?, resume))
+            .args(reencrypt_args(
+                &luks.mapping,
+                &luks.device,
+                user_key_slot(&luks.device)?,
+                resume,
+            ))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .output()
             .context("running cryptsetup reencrypt")?;
-        if let Some(why) = reencrypt_failure(out.status.code(), &String::from_utf8_lossy(&out.stderr)) {
+        if let Some(why) =
+            reencrypt_failure(out.status.code(), &String::from_utf8_lossy(&out.stderr))
+        {
             bail!("{why}");
         }
         let _buildkey = KeyFileGuard::write(BUILD_KEYFILE, crate::BUILD_PASSPHRASE.as_bytes())?;
@@ -565,7 +644,13 @@ impl Applier for SystemApplier {
             let user_slot = key_slot(&luks.device, NEW_KEYFILE)?;
             ensure_distinct_slots(user_slot, build_slot)?;
             let out = tool("cryptsetup")
-                .args(["luksRemoveKey", "--batch-mode", "--key-file", BUILD_KEYFILE, &luks.device])
+                .args([
+                    "luksRemoveKey",
+                    "--batch-mode",
+                    "--key-file",
+                    BUILD_KEYFILE,
+                    &luks.device,
+                ])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
@@ -600,23 +685,38 @@ impl Applier for SystemApplier {
 
 /// The post-condition: re-encryption finished, the build key dead, the user's key live.
 pub fn sealed_verdict(state: DiskState, build_opens: bool, user_opens: bool) -> Result<()> {
-    ensure!(state != DiskState::Reencrypting, "the disk re-encryption has not finished");
-    ensure!(!build_opens && state == DiskState::Sealed, "the build passphrase still opens the disk");
+    ensure!(
+        state != DiskState::Reencrypting,
+        "the disk re-encryption has not finished"
+    );
+    ensure!(
+        !build_opens && state == DiskState::Sealed,
+        "the build passphrase still opens the disk"
+    );
     ensure!(user_opens, "that passphrase does not open the disk");
     Ok(())
 }
 
 /// Reencrypting while a re-encryption is unfinished (build key irrelevant); else by whether the build key still opens.
-pub fn disk_state_from(reencrypting: bool, build_key_opens: impl FnOnce() -> Result<bool>) -> Result<DiskState> {
+pub fn disk_state_from(
+    reencrypting: bool,
+    build_key_opens: impl FnOnce() -> Result<bool>,
+) -> Result<DiskState> {
     if reencrypting {
         return Ok(DiskState::Reencrypting);
     }
-    Ok(if build_key_opens()? { DiskState::Fresh } else { DiskState::Sealed })
+    Ok(if build_key_opens()? {
+        DiskState::Fresh
+    } else {
+        DiskState::Sealed
+    })
 }
 
 fn current_disk_state(dev: &str) -> Result<DiskState> {
     let dump = luks_dump(dev)?;
-    let json_says = luks_json(dev).map(|j| reencrypt_in_json(&j)).unwrap_or(false);
+    let json_says = luks_json(dev)
+        .map(|j| reencrypt_in_json(&j))
+        .unwrap_or(false);
     disk_state_from(reencrypt_in_progress(&dump) || json_says, || {
         let _keyfile = KeyFileGuard::write(BUILD_KEYFILE, crate::BUILD_PASSPHRASE.as_bytes())?;
         key_opens_device(dev, BUILD_KEYFILE)
@@ -650,7 +750,15 @@ pub fn passphrase_verdict(code: Option<i32>) -> Result<bool> {
 fn key_slot(dev: &str, keyfile: &str) -> Result<u32> {
     for slot in parse_keyslots(&luks_dump(dev)?) {
         let status = tool("cryptsetup")
-            .args(["open", "--test-passphrase", "--key-file", keyfile, "--key-slot", &slot.to_string(), dev])
+            .args([
+                "open",
+                "--test-passphrase",
+                "--key-file",
+                keyfile,
+                "--key-slot",
+                &slot.to_string(),
+                dev,
+            ])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -669,7 +777,10 @@ fn user_key_slot(dev: &str) -> Result<u32> {
 
 /// Removing the build key must never remove the slot the user's key lives in.
 pub fn ensure_distinct_slots(user_slot: u32, build_slot: u32) -> Result<()> {
-    ensure!(user_slot != build_slot, "the new passphrase shares a keyslot with the build passphrase; not removing it");
+    ensure!(
+        user_slot != build_slot,
+        "the new passphrase shares a keyslot with the build passphrase; not removing it"
+    );
     Ok(())
 }
 
@@ -713,7 +824,16 @@ pub fn luks_add_key_args(dev: &str) -> Vec<String> {
 /// argv for the online volume-key replacement (or its resume). The user's key unlocks it, so the build slot is not re-wrapped and dies with the old key.
 pub fn reencrypt_args(mapping: &str, dev: &str, slot: u32, resume: bool) -> Vec<String> {
     let slot = slot.to_string();
-    let mut args: Vec<&str> = vec!["reencrypt", "--batch-mode", "--key-file", NEW_KEYFILE, "--key-slot", &slot, "--active-name", mapping];
+    let mut args: Vec<&str> = vec![
+        "reencrypt",
+        "--batch-mode",
+        "--key-file",
+        NEW_KEYFILE,
+        "--key-slot",
+        &slot,
+        "--active-name",
+        mapping,
+    ];
     if resume {
         args.push("--resume-only");
     } else {
@@ -786,7 +906,8 @@ impl KeyFileGuard {
             .mode(0o400)
             .open(path)
             .with_context(|| format!("creating {path}"))?;
-        f.write_all(bytes).with_context(|| format!("writing {path}"))?;
+        f.write_all(bytes)
+            .with_context(|| format!("writing {path}"))?;
         Ok(KeyFileGuard { path })
     }
 }
@@ -797,13 +918,21 @@ impl Drop for KeyFileGuard {
     }
 }
 
+/// overlayroot mounts the real root read-only here, leaving `/` as the overlay.
+const OVERLAY_LOWER: &str = "/media/root-ro";
+
 /// The device mounted on / in `lsblk -no NAME,MOUNTPOINT` output.
 pub fn parse_lsblk_root(output: &str) -> Option<String> {
-    output.lines().find_map(|line| {
-        let mut fields = line.split_whitespace();
-        let name = fields.next()?.trim_start_matches(|c: char| !c.is_alphanumeric());
-        fields.find(|m| *m == "/").map(|_| name.to_string())
-    })
+    let find = |mount: &str| {
+        output.lines().find_map(|line| {
+            let mut fields = line.split_whitespace();
+            let name = fields
+                .next()?
+                .trim_start_matches(|c: char| !c.is_alphanumeric());
+            fields.find(|m| *m == mount).map(|_| name.to_string())
+        })
+    };
+    find("/").or_else(|| find(OVERLAY_LOWER))
 }
 
 /// dm names reachable from `from` (inclusive) in `dmsetup ls --tree` output.
@@ -814,9 +943,9 @@ pub fn dm_ancestors(tree: &str, from: &str) -> Vec<String> {
         if line.trim().is_empty() {
             continue;
         }
-        let body = line
-            .trim_start()
-            .trim_start_matches(['\u{251c}', '\u{2514}', '\u{2500}', '\u{2502}', '|', '`', '-', ' ', '\t']);
+        let body = line.trim_start().trim_start_matches([
+            '\u{251c}', '\u{2514}', '\u{2500}', '\u{2502}', '|', '`', '-', ' ', '\t',
+        ]);
         let name = dm_line_name(body);
         if line.starts_with(' ') || line.starts_with('\t') {
             if let (Some(parent), Some(child)) = (&section, name) {
@@ -884,7 +1013,10 @@ pub fn resolve_root_luks_mapping(
 
 /// crypttab source → device: `UUID=` through blkid, literal /dev/ paths as-is.
 fn resolve_crypttab_source<'a>(source: &'a str, blkid: &'a str) -> Option<&'a str> {
-    if let Some(uuid) = source.strip_prefix("UUID=").or_else(|| source.strip_prefix("uuid=")) {
+    if let Some(uuid) = source
+        .strip_prefix("UUID=")
+        .or_else(|| source.strip_prefix("uuid="))
+    {
         blkid_device_with_uuid(blkid, uuid)
     } else if source.starts_with("/dev/") {
         Some(source)
@@ -914,7 +1046,11 @@ fn discover_luks() -> Result<RootLuks> {
     let out = tool("blkid")
         .output()
         .context("running blkid (is the util-linux package present?)")?;
-    ensure!(out.status.success(), "blkid failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+    ensure!(
+        out.status.success(),
+        "blkid failed: {}",
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
     resolve_root_luks_mapping(&crypttab, &ancestry, &String::from_utf8_lossy(&out.stdout))
         .map(|(mapping, device)| RootLuks { mapping, device })
         .ok_or_else(|| anyhow!("no crypttab LUKS target on root's device-mapper ancestry"))
@@ -926,14 +1062,22 @@ fn root_dm_ancestry() -> Result<Vec<String>> {
         .args(["-nlo", "NAME,MOUNTPOINT"])
         .output()
         .context("running lsblk")?;
-    ensure!(out.status.success(), "lsblk failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+    ensure!(
+        out.status.success(),
+        "lsblk failed: {}",
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
     let root = parse_lsblk_root(&String::from_utf8_lossy(&out.stdout))
         .ok_or_else(|| anyhow!("lsblk shows no device mounted on /"))?;
     let tree = tool("dmsetup")
         .args(["ls", "--tree", "-o", "ascii"])
         .output()
         .context("running dmsetup")?;
-    ensure!(tree.status.success(), "dmsetup failed: {}", String::from_utf8_lossy(&tree.stderr).trim());
+    ensure!(
+        tree.status.success(),
+        "dmsetup failed: {}",
+        String::from_utf8_lossy(&tree.stderr).trim()
+    );
     Ok(dm_ancestors(&String::from_utf8_lossy(&tree.stdout), &root))
 }
 
@@ -1043,7 +1187,9 @@ pub fn amnesic_boot(cmdline: &str) -> bool {
 }
 
 pub fn amnesic_boot_now() -> bool {
-    fs::read_to_string("/proc/cmdline").map(|c| amnesic_boot(&c)).unwrap_or(false)
+    fs::read_to_string("/proc/cmdline")
+        .map(|c| amnesic_boot(&c))
+        .unwrap_or(false)
 }
 
 pub fn reboot() -> Result<()> {
@@ -1082,13 +1228,25 @@ mod tests {
 
     impl FakeApplier {
         fn new() -> Self {
-            FakeApplier { calls: Vec::new(), fail_at: None, state: DiskState::Fresh, live_key: None }
+            FakeApplier {
+                calls: Vec::new(),
+                fail_at: None,
+                state: DiskState::Fresh,
+                live_key: None,
+            }
         }
         fn failing_at(name: &'static str) -> Self {
-            FakeApplier { fail_at: Some(name), ..FakeApplier::new() }
+            FakeApplier {
+                fail_at: Some(name),
+                ..FakeApplier::new()
+            }
         }
         fn in_state(state: DiskState, key: &str) -> Self {
-            FakeApplier { state, live_key: Some(key.to_string()), ..FakeApplier::new() }
+            FakeApplier {
+                state,
+                live_key: Some(key.to_string()),
+                ..FakeApplier::new()
+            }
         }
         fn step(&mut self, name: &str) -> Result<()> {
             self.calls.push(name.to_string());
@@ -1114,13 +1272,19 @@ mod tests {
         }
         fn reencrypt(&mut self, pass: &SecretBuf, resume: bool) -> Result<()> {
             self.step(if resume { "resume" } else { "reencrypt" })?;
-            ensure!(self.live_key.as_deref() == Some(pass.expose()), "that passphrase does not open the disk");
+            ensure!(
+                self.live_key.as_deref() == Some(pass.expose()),
+                "that passphrase does not open the disk"
+            );
             self.state = DiskState::Sealed;
             Ok(())
         }
         fn verify_sealed(&mut self, pass: &SecretBuf) -> Result<()> {
             self.step("verify_sealed")?;
-            ensure!(self.live_key.as_deref() == Some(pass.expose()), "that passphrase does not open the disk");
+            ensure!(
+                self.live_key.as_deref() == Some(pass.expose()),
+                "that passphrase does not open the disk"
+            );
             sealed_verdict(self.state, false, true)
         }
     }
@@ -1205,7 +1369,13 @@ mod tests {
         run_apply(&mut fake, crate::BUILD_PASSPHRASE.as_bytes(), &disk, &user).unwrap();
         assert_eq!(
             fake.calls,
-            vec!["disk_state", "set_user_password", "luksAddKey", "reencrypt", "verify_sealed"]
+            vec![
+                "disk_state",
+                "set_user_password",
+                "luksAddKey",
+                "reencrypt",
+                "verify_sealed"
+            ]
         );
         app.apply_succeeded();
         assert_eq!(app.screen(), Screen::Rebooting);
@@ -1217,7 +1387,11 @@ mod tests {
         let (disk, user) = app.secrets().unwrap();
         let mut fake = FakeApplier::new();
         run_apply(&mut fake, b"ombra-disk", &disk, &user).unwrap();
-        let pw = fake.calls.iter().position(|c| c == "set_user_password").unwrap();
+        let pw = fake
+            .calls
+            .iter()
+            .position(|c| c == "set_user_password")
+            .unwrap();
         let add = fake.calls.iter().position(|c| c == "luksAddKey").unwrap();
         assert!(pw < add, "sequence: {:?}", fake.calls);
     }
@@ -1230,10 +1404,17 @@ mod tests {
         run_apply(&mut fake, b"ombra-disk", &disk, &user).unwrap();
         let add = fake.calls.iter().position(|c| c == "luksAddKey").unwrap();
         let enc = fake.calls.iter().position(|c| c == "reencrypt").unwrap();
-        let verify = fake.calls.iter().position(|c| c == "verify_sealed").unwrap();
+        let verify = fake
+            .calls
+            .iter()
+            .position(|c| c == "verify_sealed")
+            .unwrap();
         assert!(add < enc && enc < verify, "sequence: {:?}", fake.calls);
         // no step ever removes the build slot by itself: re-encryption retires it
-        assert!(!fake.calls.iter().any(|c| c.contains("Kill") || c.contains("Remove")));
+        assert!(!fake
+            .calls
+            .iter()
+            .any(|c| c.contains("Kill") || c.contains("Remove")));
     }
 
     #[test]
@@ -1274,7 +1455,10 @@ mod tests {
         let typed = SecretBuf::new("a-different-one");
         let mut fake = FakeApplier::in_state(DiskState::Sealed, "sardines1");
         let err = run_apply(&mut fake, b"ombra-disk", &typed, &user).unwrap_err();
-        assert!(err.to_string().contains("does not open the disk"), "{err:#}");
+        assert!(
+            err.to_string().contains("does not open the disk"),
+            "{err:#}"
+        );
         assert!(!fake.calls.contains(&"reencrypt".to_string()));
         // the right one then passes without touching the volume key again
         let right = SecretBuf::new("sardines1");
@@ -1292,7 +1476,10 @@ mod tests {
         fake.fail_at = None;
         fake.calls.clear();
         run_apply(&mut fake, b"ombra-disk", &disk, &user).unwrap();
-        assert_eq!(fake.calls, vec!["disk_state", "verify_sealed", "set_user_password"]);
+        assert_eq!(
+            fake.calls,
+            vec!["disk_state", "verify_sealed", "set_user_password"]
+        );
     }
 
     #[test]
@@ -1340,7 +1527,10 @@ mod tests {
         assert!(app.resume_secret().is_none());
         assert_eq!(
             app.note(),
-            Some(("that is the public build passphrase - choose your own", Severity::Bad))
+            Some((
+                "that is the public build passphrase - choose your own",
+                Severity::Bad
+            ))
         );
     }
 
@@ -1355,9 +1545,11 @@ mod tests {
         let idle = r#"{"keyslots":{"0":{"type":"luks2","key_size":64}},"config":{"json_size":"12288","keyslots_size":"16744448"}}"#;
         assert!(!reencrypt_in_json(idle));
         assert!(!reencrypt_in_json(""));
-        let slot = r#"{"keyslots":{"0":{"type":"luks2"},"2":{ "type" : "reencrypt","mode":"reencrypt"}}}"#;
+        let slot =
+            r#"{"keyslots":{"0":{"type":"luks2"},"2":{ "type" : "reencrypt","mode":"reencrypt"}}}"#;
         assert!(reencrypt_in_json(slot));
-        let req = r#"{"keyslots":{},"config":{"requirements":{"mandatory":["online-reencrypt-v2"]}}}"#;
+        let req =
+            r#"{"keyslots":{},"config":{"requirements":{"mandatory":["online-reencrypt-v2"]}}}"#;
         assert!(reencrypt_in_json(req));
         let off = "{\"config\":{\"requirements\":{\"mandatory\":[\"offline-reencrypt\"]}}}";
         assert!(reencrypt_in_json(off));
@@ -1369,7 +1561,10 @@ mod tests {
         assert_eq!(app.screen(), Screen::Resume);
         type_into(&mut app, "short");
         assert_eq!(app.on_key(key(KeyCode::Enter)), Action::None);
-        assert_eq!(app.note(), Some(("use at least 8 characters", Severity::Bad)));
+        assert_eq!(
+            app.note(),
+            Some(("use at least 8 characters", Severity::Bad))
+        );
         for _ in 0..5 {
             app.on_key(key(KeyCode::Backspace));
         }
@@ -1406,7 +1601,10 @@ mod tests {
         assert_eq!(passphrase_verdict(Some(0)).unwrap(), true);
         assert_eq!(passphrase_verdict(Some(2)).unwrap(), false);
         for code in [Some(1), Some(3), Some(4), Some(5), Some(127), Some(255)] {
-            assert!(passphrase_verdict(code).is_err(), "{code:?} must fail closed");
+            assert!(
+                passphrase_verdict(code).is_err(),
+                "{code:?} must fail closed"
+            );
         }
         assert!(passphrase_verdict(None).is_err());
     }
@@ -1416,8 +1614,14 @@ mod tests {
         // build key dead but re-encryption unfinished: not sealed, and the key is never even probed
         let state = disk_state_from(true, || panic!("probed the build key")).unwrap();
         assert_eq!(state, DiskState::Reencrypting);
-        assert_eq!(disk_state_from(false, || Ok(false)).unwrap(), DiskState::Sealed);
-        assert_eq!(disk_state_from(false, || Ok(true)).unwrap(), DiskState::Fresh);
+        assert_eq!(
+            disk_state_from(false, || Ok(false)).unwrap(),
+            DiskState::Sealed
+        );
+        assert_eq!(
+            disk_state_from(false, || Ok(true)).unwrap(),
+            DiskState::Fresh
+        );
         // a probe error is an error, never "sealed"
         assert!(disk_state_from(false, || bail!("exit 5")).is_err());
     }
@@ -1434,8 +1638,10 @@ mod tests {
     #[test]
     fn reencrypt_progress_is_read_from_the_header() {
         assert!(!reencrypt_in_progress(LIVE_LUKSDUMP));
-        let mid = LIVE_LUKSDUMP
-            .replace("Flags:       \t(no flags)\n", "Flags:       \t(no flags)\nRequirements:\tonline-reencrypt-v2\n");
+        let mid = LIVE_LUKSDUMP.replace(
+            "Flags:       \t(no flags)\n",
+            "Flags:       \t(no flags)\nRequirements:\tonline-reencrypt-v2\n",
+        );
         assert!(reencrypt_in_progress(&mid));
         let slot_only = LIVE_LUKSDUMP.replace(
             "Tokens:",
@@ -1471,8 +1677,12 @@ mod tests {
     #[test]
     fn reencrypt_failures_are_plain() {
         assert_eq!(reencrypt_failure(Some(0), ""), None);
-        assert!(reencrypt_failure(Some(2), "").unwrap().contains("does not open"));
-        assert!(reencrypt_failure(Some(1), " no space \n").unwrap().contains("no space"));
+        assert!(reencrypt_failure(Some(2), "")
+            .unwrap()
+            .contains("does not open"));
+        assert!(reencrypt_failure(Some(1), " no space \n")
+            .unwrap()
+            .contains("no space"));
         assert!(reencrypt_failure(None, "").is_some());
     }
 
@@ -1499,7 +1709,10 @@ mod tests {
         app.begin_apply();
         app.apply_failed("rotating the disk key failed: boom");
         assert_eq!(app.screen(), Screen::DiskPassphrase);
-        assert_eq!(app.note(), Some(("rotating the disk key failed: boom", Severity::Bad)));
+        assert_eq!(
+            app.note(),
+            Some(("rotating the disk key failed: boom", Severity::Bad))
+        );
         assert!(app.active_flow().active_field().is_empty());
         type_into(&mut app, "newpass99");
         app.on_key(key(KeyCode::Enter));
@@ -1521,7 +1734,10 @@ mod tests {
         // key-add failure after chpasswd: the password already landed, the volume key untouched
         let mut fake = FakeApplier::failing_at("luksAddKey");
         assert!(run_apply(&mut fake, b"ombra-disk", &disk, &user).is_err());
-        assert_eq!(fake.calls, vec!["disk_state", "set_user_password", "luksAddKey"]);
+        assert_eq!(
+            fake.calls,
+            vec!["disk_state", "set_user_password", "luksAddKey"]
+        );
     }
 
     /// Real cryptsetup `luksDump` from the live machine — THE regression pin.
@@ -1621,9 +1837,11 @@ Tokens:
 
     #[test]
     fn the_kill_list_never_touches_what_the_add_created() {
-        for (before, after) in
-            [(vec![0], vec![0, 1]), (vec![0, 1], vec![0, 1, 2]), (vec![1, 3], vec![0, 1, 3])]
-        {
+        for (before, after) in [
+            (vec![0], vec![0, 1]),
+            (vec![0, 1], vec![0, 1, 2]),
+            (vec![1, 3], vec![0, 1, 3]),
+        ] {
             let created = created_slots(&before, &after);
             assert!(!created.is_empty(), "no created slot: the run must abort");
             for slot in &before {
@@ -1677,8 +1895,14 @@ nvme0n1p4_crypt (254:0)
             dm_ancestors(LIVE_DM_TREE, "vg0-root"),
             vec!["vg0-root", "nvme0n1p4_crypt", "vg0-swap"]
         );
-        assert_eq!(dm_ancestors(LIVE_DM_TREE, "nvme0n1p4_crypt"), vec!["nvme0n1p4_crypt"]);
-        assert_eq!(dm_ancestors(LIVE_DM_TREE, "no-such-device"), vec!["no-such-device"]);
+        assert_eq!(
+            dm_ancestors(LIVE_DM_TREE, "nvme0n1p4_crypt"),
+            vec!["nvme0n1p4_crypt"]
+        );
+        assert_eq!(
+            dm_ancestors(LIVE_DM_TREE, "no-such-device"),
+            vec!["no-such-device"]
+        );
     }
 
     #[test]
@@ -1693,6 +1917,8 @@ vg0-swap [SWAP]
 ";
         assert_eq!(parse_lsblk_root(out).as_deref(), Some("vg0-root"));
         assert_eq!(parse_lsblk_root(""), None);
+        let amnesic = "nvme0n1p4_crypt\nvg0-root /media/root-ro\nnvme0n1p3 /media/root-ro/boot\n";
+        assert_eq!(parse_lsblk_root(amnesic).as_deref(), Some("vg0-root"));
     }
 
     #[test]
@@ -1716,12 +1942,22 @@ vg0-swap [SWAP]
         let ancestry = dm_ancestors(LIVE_DM_TREE, "vg0-root");
         // empty / blank / comment-only
         assert_eq!(resolve_root_luks("", &ancestry, TWO_LUKS_BLKID), None);
-        assert_eq!(resolve_root_luks("   \n# just a comment\n", &ancestry, TWO_LUKS_BLKID), None);
+        assert_eq!(
+            resolve_root_luks("   \n# just a comment\n", &ancestry, TWO_LUKS_BLKID),
+            None
+        );
         // malformed line: no resolvable pair
-        assert_eq!(resolve_root_luks("onlytarget\n", &ancestry, TWO_LUKS_BLKID), None);
+        assert_eq!(
+            resolve_root_luks("onlytarget\n", &ancestry, TWO_LUKS_BLKID),
+            None
+        );
         // a target off the root ancestry is ignored even when its source resolves
         assert_eq!(
-            resolve_root_luks("cryptswap /dev/vg0/swap_1 /dev/urandom swap\n", &ancestry, TWO_LUKS_BLKID),
+            resolve_root_luks(
+                "cryptswap /dev/vg0/swap_1 /dev/urandom swap\n",
+                &ancestry,
+                TWO_LUKS_BLKID
+            ),
             None
         );
         // the root target's UUID missing from blkid is a failure, never a guess
@@ -1869,16 +2105,27 @@ Keyslots:
         assert!(all.contains("LUKS2 \u{b7} AES-256-XTS \u{b7} argon2id"));
 
         let field_x = ((128u16 - theme::FIELD_WIDTH) / 2) as usize;
-        let title_y = rows.iter().position(|r| r.contains("set your disk")).unwrap();
+        let title_y = rows
+            .iter()
+            .position(|r| r.contains("set your disk"))
+            .unwrap();
         let title_x = rows[title_y].find("set your disk").unwrap();
         assert_eq!(title_x, field_x, "title left-aligned to the box edge");
-        assert_eq!(cell(&buf, field_x, title_y).fg, theme::TEXT, "title is WHITE");
+        assert_eq!(
+            cell(&buf, field_x, title_y).fg,
+            theme::TEXT,
+            "title is WHITE"
+        );
         assert_eq!(cell(&buf, field_x, title_y + 1).symbol(), "\u{256d}");
         let info_y = rows.iter().position(|r| r.contains("LUKS2")).unwrap();
         let info_x = rows[info_y].find("LUKS2").unwrap();
         assert_eq!(info_x, field_x, "info line left-aligned to the box edge");
         assert_eq!(cell(&buf, field_x, info_y).fg, theme::LABEL);
-        assert_eq!(cell(&buf, field_x + 6, info_y).fg, theme::ACCENT, "middle dots are indigo");
+        assert_eq!(
+            cell(&buf, field_x + 6, info_y).fg,
+            theme::ACCENT,
+            "middle dots are indigo"
+        );
     }
 
     #[test]
@@ -1892,17 +2139,39 @@ Keyslots:
         terminal.draw(|f| draw(f, &app)).unwrap();
         let buf = terminal.backend().buffer().clone();
         let rows = buf_rows(&buf);
-        let title_y = rows.iter().position(|r| r.contains("set your disk")).unwrap();
-        assert_eq!(cell(&buf, field_x, title_y + 1).symbol(), "\u{256d}", "box 1");
-        assert_ne!(cell(&buf, field_x, title_y + 4).symbol(), "\u{256d}", "no second box yet");
+        let title_y = rows
+            .iter()
+            .position(|r| r.contains("set your disk"))
+            .unwrap();
+        assert_eq!(
+            cell(&buf, field_x, title_y + 1).symbol(),
+            "\u{256d}",
+            "box 1"
+        );
+        assert_ne!(
+            cell(&buf, field_x, title_y + 4).symbol(),
+            "\u{256d}",
+            "no second box yet"
+        );
 
         app.on_key(key(KeyCode::Enter));
         terminal.draw(|f| draw(f, &app)).unwrap();
         let buf = terminal.backend().buffer().clone();
         let rows = buf_rows(&buf);
-        assert_eq!(cell(&buf, field_x, title_y + 1).symbol(), "\u{256d}", "box 1 stays");
-        assert_eq!(cell(&buf, field_x, title_y + 4).symbol(), "\u{256d}", "box 2 spawned directly below");
-        let msg_y = rows.iter().position(|r| r.contains("repeat it to confirm")).unwrap();
+        assert_eq!(
+            cell(&buf, field_x, title_y + 1).symbol(),
+            "\u{256d}",
+            "box 1 stays"
+        );
+        assert_eq!(
+            cell(&buf, field_x, title_y + 4).symbol(),
+            "\u{256d}",
+            "box 2 spawned directly below"
+        );
+        let msg_y = rows
+            .iter()
+            .position(|r| r.contains("repeat it to confirm"))
+            .unwrap();
         assert_eq!(msg_y, title_y + 7, "status line hugs box 2");
         assert_eq!(rows[msg_y].find("repeat it to confirm").unwrap(), field_x);
         assert_eq!(cell(&buf, field_x, msg_y).fg, theme::MUTED);
@@ -1920,9 +2189,19 @@ Keyslots:
         terminal.draw(|f| draw(f, &app)).unwrap();
         let buf = terminal.backend().buffer().clone();
         let rows = buf_rows(&buf);
-        let msg_y = rows.iter().position(|r| r.contains("use at least 8 characters")).unwrap();
-        assert_eq!(rows[msg_y].find("use at least 8 characters").unwrap(), field_x);
-        assert_eq!(cell(&buf, field_x, msg_y).fg, theme::BAD, "validation is BAD red, no [-] tag");
+        let msg_y = rows
+            .iter()
+            .position(|r| r.contains("use at least 8 characters"))
+            .unwrap();
+        assert_eq!(
+            rows[msg_y].find("use at least 8 characters").unwrap(),
+            field_x
+        );
+        assert_eq!(
+            cell(&buf, field_x, msg_y).fg,
+            theme::BAD,
+            "validation is BAD red, no [-] tag"
+        );
         assert!(!rows.join("\n").contains("[-]"));
         assert_eq!(app.active_flow().active_field().value(), "short");
     }
@@ -1937,7 +2216,10 @@ Keyslots:
         type_into(&mut app, "sardines1");
         terminal.draw(|f| draw(f, &app)).unwrap();
         let all = buf_rows(terminal.backend().buffer()).join("\n");
-        assert!(all.contains(LUKS2), "tech line shows before the first box is accepted");
+        assert!(
+            all.contains(LUKS2),
+            "tech line shows before the first box is accepted"
+        );
         assert!(!all.contains("repeat it to confirm"));
 
         app.on_key(key(KeyCode::Enter));
@@ -1965,7 +2247,10 @@ Keyslots:
         terminal.draw(|f| draw(f, &app)).unwrap();
         let all = buf_rows(terminal.backend().buffer()).join("\n");
         assert!(all.contains("repeat it to confirm"));
-        assert!(!all.contains(ACCOUNT), "the account line must not repeat either");
+        assert!(
+            !all.contains(ACCOUNT),
+            "the account line must not repeat either"
+        );
     }
 
     #[test]
@@ -1979,13 +2264,19 @@ Keyslots:
         let field_x = ((80u16 - theme::FIELD_WIDTH) / 2) as usize;
         assert_eq!(cell(&buf, field_x, brand_y).symbol(), "\u{2500}");
         assert_eq!(cell(&buf, field_x, brand_y).fg, theme::RULE);
-        assert!(rows.iter().any(|r| r.contains(" enter  begin")), "keycap hint fits 80x24");
+        assert!(
+            rows.iter().any(|r| r.contains(" enter  begin")),
+            "keycap hint fits 80x24"
+        );
 
         app.begin_apply();
         terminal.draw(|f| draw(f, &app)).unwrap();
         let buf = terminal.backend().buffer().clone();
         let rows = buf_rows(&buf);
-        let y = rows.iter().position(|r| r.contains("do not power off")).unwrap();
+        let y = rows
+            .iter()
+            .position(|r| r.contains("do not power off"))
+            .unwrap();
         let x = rows[y].find("do not").unwrap();
         assert_eq!(cell(&buf, x, y).fg, theme::AMBER);
     }
@@ -2015,7 +2306,10 @@ Keyslots:
             assert!(all.contains("restart in persistent mode"), "{w}x{h}");
             assert!(all.contains("first-time setup needs a disk that remembers."));
             assert!(all.contains("restart and choose Persistent at the boot menu."));
-            assert!(rows.iter().any(|r| r.contains(" enter  restart")), "{w}x{h}");
+            assert!(
+                rows.iter().any(|r| r.contains(" enter  restart")),
+                "{w}x{h}"
+            );
             assert!(rows.iter().any(|r| r.contains("O M B R A")));
         }
     }

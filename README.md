@@ -26,6 +26,7 @@
 - **Encrypted at rest:** LUKS2 (argon2id) and encrypted swap on the desktop
 - **No telemetry:** no update checks, no phoning home, no exit IP shown or logged
 - **IPv6 off, generic identity, Tor-only DNS and time**
+- **Privacy applications included:** Tor Browser, KeePassXC, Kleopatra (OpenPGP), OnionShare, Electrum, Feather and SimpleX, all preset to use Tor
 - **Native arm64:** built for Apple Silicon, no emulation
 - **Pinned supply chain:** every download is pinned and hash-checked; nothing is fetched at install or boot
 
@@ -87,23 +88,23 @@ Details: [docs/INSTALL.md](docs/INSTALL.md)
 
 | | **Ombra** | Whonix | Tails |
 |---|:---|:---|:---|
-| 🧩 **Design** | **Gateway VM + desktop VM** | Gateway VM + workstation VM | Single live OS |
-| 🛡️ **Network path** | **One NIC on a private link; the only route is the gateway** | Workstation reaches the network only through the gateway | One OS; Tor enforced by firewall rules |
-| 🖥️ **Desktop** | **KDE Plasma, themed, mouse-first** | LXQt | GNOME |
-| 🐧 **Base** | **Debian 13 (trixie)** | Debian | Debian 13 (trixie) |
-| 🍎 **Apple Silicon** | ✅ **Yes, native arm64** | ⚠️ Not officially supported | ❌ No, x86-64 only |
-| 🧠 **Amnesic mode** | ✅ **Your choice at every boot** | ⚠️ Optional (live mode) | ✅ Always |
-| 🔐 **Disk encryption** | ✅ **LUKS2 on the desktop disk, inside the VM** | ❌ Not in its images; encrypt the host | ⚠️ Optional encrypted Persistent Storage |
-| 💻 **Runs on** | **VMware Fusion** | VirtualBox, KVM, Qubes | Bare hardware |
-| 📈 **Maturity** | **New, no independent audit** | Established | Established |
+| **Design** | **Gateway VM + desktop VM** | Gateway VM + workstation VM | Single live OS |
+| **Network path** | **One NIC on a private link; the only route is the gateway** | Workstation reaches the network only through the gateway | One OS; Tor enforced by firewall rules |
+| **Desktop** | **KDE Plasma, themed, mouse-first** | LXQt | GNOME |
+| **Base** | **Debian 13 (trixie)** | Debian | Debian 13 (trixie) |
+| **Apple Silicon** | **Yes, native arm64** | Partial. Not officially supported | No. x86-64 only |
+| **Amnesic mode** | **Your choice at every boot** | Partial. Optional (live mode) | Yes. Always |
+| **Disk encryption** | **LUKS2 on the desktop disk, inside the VM** | No. Not in its images; encrypt the host | Partial. Optional encrypted Persistent Storage |
+| **Runs on** | **VMware Fusion** | VirtualBox, KVM, Qubes | Bare hardware |
+| **Maturity** | **New, no independent audit** | Established | Established |
 
-✅ yes, ⚠️ partial, ❌ no. Modern means built for Apple Silicon and Debian 13 from the start; it also means new, with no independent audit yet.
+Modern means built for Apple Silicon and Debian 13 from the start; it also means new, with no independent audit yet.
 
 ## Status
 
 - Apple Silicon and VMware Fusion only; there is no x86 build
 - Only the latest release is supported; earlier releases get no fixes and their images are not kept
-- Tor Browser is the alpha channel (16.0a13): the only channel with linux-aarch64 builds
+- Tor Browser is the alpha channel (16.0a14): the only channel with linux-aarch64 builds
 - No independent security audit yet; read the [threat model](docs/THREAT_MODEL.md) before relying on it
 - Report vulnerabilities through [SECURITY.md](SECURITY.md)
 
@@ -129,7 +130,7 @@ Read the script first: [`scripts/build.sh`](scripts/build.sh). Manual route: [do
 |---|---|
 | [Design](docs/DESIGN.md) | Architecture and invariants |
 | [Threat model](docs/THREAT_MODEL.md) | What Ombra defends against, and what it does not |
-| [Install](docs/INSTALL.md) | OVA quick start and build from source |
+| [Install](docs/INSTALL.md) | Release images quick start and build from source |
 | [Third-party licenses](docs/THIRD_PARTY_LICENSES.md) | Vendored assets and linked crates |
 | [Security policy](SECURITY.md) | How to report |
 

@@ -142,7 +142,8 @@ mod tests {
     }
 
     fn tempdir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ombra-keyscript-test-{tag}-{}", std::process::id()));
+        let d =
+            std::env::temp_dir().join(format!("ombra-keyscript-test-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
@@ -222,7 +223,15 @@ mod tests {
         let marker = dir.join("askpass-attempts-x");
         let mut out: Vec<u8> = Vec::new();
         let mut ui = FakeUi::scripted(FakeUi::typed("sardines1"));
-        run(&mut out, &marker, &mut ui, "ombra-disk", Duration::ZERO, &mut || true).unwrap();
+        run(
+            &mut out,
+            &marker,
+            &mut ui,
+            "ombra-disk",
+            Duration::ZERO,
+            &mut || true,
+        )
+        .unwrap();
         assert_eq!(out, b"sardines1");
         assert_eq!(ui.splash_draws, 0);
         assert_eq!(ui.last_message, None);
@@ -269,10 +278,7 @@ mod tests {
         keyscript_run_for_test(&marker, &mut out, &mut ui, Duration::ZERO).unwrap();
 
         assert_eq!(out, b"sardines1");
-        assert_eq!(
-            ui.last_message.as_deref(),
-            Some(RETRY_MESSAGE),
-        );
+        assert_eq!(ui.last_message.as_deref(), Some(RETRY_MESSAGE),);
         assert_eq!(read_attempts(&marker), 3);
     }
 
@@ -286,7 +292,10 @@ mod tests {
         let mut ui = FakeUi::scripted(FakeUi::typed("abc"));
         let res = keyscript_run_for_test(&marker, &mut out, &mut ui, Duration::ZERO);
         assert!(res.is_err());
-        assert_eq!(ui.last_message, Some("use at least 8 characters".to_string()));
+        assert_eq!(
+            ui.last_message,
+            Some("use at least 8 characters".to_string())
+        );
         assert_eq!(out, b"");
     }
 
@@ -375,7 +384,7 @@ mod tests {
         assert!(is_keyscript_invocation(&bare(), true));
         assert!(is_keyscript_invocation(&cryptroot(), false));
         assert!(!is_keyscript_invocation(
-            &[ "ombra-askpass".to_string(), "--quiet".to_string() ],
+            &["ombra-askpass".to_string(), "--quiet".to_string()],
             false
         ));
     }
@@ -386,6 +395,13 @@ mod tests {
         ui: &mut FakeUi,
         splash: Duration,
     ) -> io::Result<()> {
-        run(out, marker, ui, crate::BUILD_PASSPHRASE, splash, &mut || false)
+        run(
+            out,
+            marker,
+            ui,
+            crate::BUILD_PASSPHRASE,
+            splash,
+            &mut || false,
+        )
     }
 }

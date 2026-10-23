@@ -1,0 +1,8 @@
+[Unit]
+Description=Commit an update ten minutes after boot
+
+[Timer]
+OnBootSec=10min
+
+[Install]
+WantedBy=timers.target

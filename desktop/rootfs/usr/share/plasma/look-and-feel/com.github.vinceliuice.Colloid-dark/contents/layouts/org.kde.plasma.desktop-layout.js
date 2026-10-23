@@ -14,12 +14,14 @@ bar.hiding = "none"
 bar.lengthMode = "fill"
 bar.height = Math.floor(gridUnit * 2)
 
-bar.addWidget("org.ombra.status")
 // app menus live in the bar, macOS-style: Qt apps export automatically
 // once this widget exists (kded appmenu publishes the Registrar); kitty
 // and systemsettings have no menus and collapse to zero width
 bar.addWidget("org.kde.plasma.appmenu")
 bar.addWidget("org.kde.plasma.panelspacer")
+
+// the Tor dot sits with the other status icons on the right, just before the tray
+bar.addWidget("org.ombra.status")
 
 // org.kde.plasma.systemtray, NOT the private one: the private applet
 // crashes plasmashell mid-script when added this way, and the restart

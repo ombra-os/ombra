@@ -1,8 +1,9 @@
 # Installing Ombra
 
-Three paths: import the prebuilt OVAs into Fusion (next section), run the
+Three paths: open the prebuilt VM archives in Fusion (next section), run the
 guided build below, or build by hand (steps 1-7). A final section covers
-exporting the OVAs, for maintainers.
+exporting the release archives, for maintainers. Once installed, Ombra
+updates itself in place when you ask; see [UPDATES.md](UPDATES.md).
 
 ## Guided build
 
@@ -18,14 +19,18 @@ after the installer ISOs; `--yes` answers every prompt.
 ## Quick start: requirements
 
 - Apple Silicon Mac, VMware Fusion
-- About 40 GB of free disk. The downloads are about 5.1 GB (desktop) and
-  0.7 GB (gateway). The provisioned virtual disks are
-  5 GB (gateway) and 30 GB (desktop); they occupy less until they fill.
+- About 45 GB of free disk. The downloads are about 7 GB (desktop) and
+  0.7 GB (gateway), and you need room for the archive and the unzipped
+  copy until you delete the archive. The provisioned virtual disks are
+  5 GB (gateway) and 30 GB (desktop). First-use setup re-encrypts the
+  whole desktop disk, so it grows to its full 30 GB then. If the Mac runs
+  out of space, Fusion stops the VM with a "no space left" prompt: free
+  space and choose Retry.
 
-## Quick start: the release OVAs
+## Quick start: the release images
 
-1. Download `ombra-gateway-arm64-v1.0.0.ova`,
-   `ombra-desktop-arm64-v1.0.0.ova` and `SHA256SUMS.txt` from the
+1. Download `ombra-gateway-arm64-v1.1.0.vmwarevm.zip`,
+   `ombra-desktop-arm64-v1.1.0.vmwarevm.zip` and `SHA256SUMS.txt` from the
    download page into one folder, and verify what you downloaded:
 
    ```sh
@@ -33,12 +38,18 @@ after the installer ISOs; `--yes` answers every prompt.
    ```
 
    Every file you did download must report `OK`.
-2. Double-click each `.ova` (or use File > Import in Fusion) and import
-   it. Accept the defaults; Fusion may warn that the OVA was not
-   signed. Nothing needs changing in the VM settings.
+2. Double-click each zip to unpack it, and move the two `.vmwarevm`
+   folders into `~/Virtual Machines.localized/`.
+   Then double-click each `.vmwarevm` to open it in Fusion. If Fusion asks
+   whether you moved or copied it, choose **I Moved It**. Nothing needs
+   changing in the VM settings.
 3. Power on the gateway first and pick a boot mode (below), let it reach
    its health report, then power on the desktop, pick a boot mode, and
    continue with First boot below.
+
+Releases before v1.1 shipped as OVA files. An OVA cannot carry the ARM
+guest type, so Fusion on Apple silicon refused to start an imported OVA
+("requires x86"); the `.vmwarevm` archives keep it.
 
 ### Boot modes
 
@@ -64,7 +75,7 @@ either mode at any time.
   toolchain version is pinned in `core/rust-toolchain.toml`)
 - `xorriso` (`brew install xorriso`), `python3`
 
-Tor Browser ships from the alpha channel (16.0a13): it is the only
+Tor Browser ships from the alpha channel (16.0a14): it is the only
 channel that publishes linux-aarch64 builds.
 
 ## 1. Fetch the pinned Debian netinst
@@ -119,9 +130,9 @@ so use the pin's `archive_url`:
 
 ```sh
 mkdir -p build/vendor
-curl -L -o build/vendor/tor-browser-linux-aarch64-16.0a13.tar.xz \
-  https://archive.torproject.org/tor-package-archive/torbrowser/16.0a13/tor-browser-linux-aarch64-16.0a13.tar.xz
-shasum -a 256 build/vendor/tor-browser-linux-aarch64-16.0a13.tar.xz
+curl -L -o build/vendor/tor-browser-linux-aarch64-16.0a14.tar.xz \
+  https://archive.torproject.org/tor-package-archive/torbrowser/16.0a14/tor-browser-linux-aarch64-16.0a14.tar.xz
+shasum -a 256 build/vendor/tor-browser-linux-aarch64-16.0a14.tar.xz
 ```
 
 The hash must equal the pin's `sha256=` line; `make-install-iso.sh`
@@ -225,36 +236,32 @@ bash build/fusion/create-desktop-vm.sh --verify --fix "$HOME/Virtual Machines.lo
 
 ## Updates
 
-- Only the latest release is supported; earlier releases get no fixes and
-  their images are not kept.
-- Tor Browser's updater is disabled. Machine packages are frozen at the
-  release image, and a new Tor Browser arrives with a new release
-  image.
-- Desktop OS packages are frozen at the release image — the desktop
-  ships no root shell by design. Updated packages arrive with new
-  release images.
-- The gateway's Amnesic mode starts every boot from the shipped image;
-  gateway updates are new images by construction.
+- Ombra updates itself in place, only when you ask. A few minutes after boot
+  and daily, each machine checks a small signed index through Tor and tells
+  you when a newer version exists. Details: [UPDATES.md](UPDATES.md).
+- Desktop: open **Update Ombra** from the menu. Gateway: `sudo ombra-update apply`
+  at its console. Updates need Persistent mode.
+- Tor Browser's own updater is disabled; new Tor Browser builds arrive as
+  Ombra updates, signed and checked before anything is written.
+- Only the latest release is supported; earlier releases get no fixes.
+  v1.0 installs have no updater and need a fresh download.
+- The gateway's Amnesic mode starts every boot from the installed system,
+  so it never carries an update itself: apply updates in Persistent mode.
 
-## Export the release OVAs (maintainers)
+## Export the release images (maintainers)
 
 Start from freshly installed VMs, both powered off, both post-installed.
 The desktop must never have been booted.
 
 ```sh
-bash build/fusion/export-release-image.sh gateway
-bash build/fusion/export-release-image.sh desktop
-bash build/fusion/verify-ova.sh build/releases/ombra-gateway-arm64-v1.0.0.ova
-bash build/fusion/verify-ova.sh build/releases/ombra-desktop-arm64-v1.0.0.ova
+bash build/fusion/export-bundle.sh gateway
+bash build/fusion/export-bundle.sh desktop
 ```
 
-The export strips builder residue from a copy of the VM bundle, runs
-`ovftool`, and writes a single file per VM (the disk is
-compressed inside; an encrypted disk does not shrink further). Set
-`OMBRA_SPLIT=1` to split into `.ova.part-aa`, `.part-ab`, ... under
-GitHub's 2 GiB release-asset cap for GitHub-only hosting. Output lands
-in `build/releases/` with one `SHA256SUMS.txt`, rewritten on every run
-with a line per artifact present; downloaders filter it with
-`--ignore-missing`.
-`verify-ova.sh` imports the OVA into a scratch directory and asserts the
-shipped shape of the resulting VM.
+The export strips builder residue from a copy of the VM bundle, asserts
+the shipped shape (ARM guest type, NICs, boot order, isolation keys),
+zips it, runs `verify-bundle.sh` on the archive and writes one
+`SHA256SUMS.txt` with a line per archive present; downloaders filter it
+with `--ignore-missing`. Output lands in `build/releases/`. The older
+`export-release-image.sh` OVA path is kept for reference only: OVF cannot
+express an ARM guest type.

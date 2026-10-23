@@ -1,0 +1,6 @@
+{
+    "auto_connect": true,
+    "check_updates": false,
+    "proxy": "socks5:10.55.10.1:9050::",
+    "show_crash_reporter": false
+}

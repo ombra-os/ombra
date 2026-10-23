@@ -1,6 +1,6 @@
 #!/bin/bash
 # Upload release images to a Cloudflare R2 bucket over its S3 API, then verify the public URL.
-# usage: bash scripts/upload-r2.sh [file ...]   (default: every build/releases/*.ova plus SHA256SUMS.txt)
+# usage: bash scripts/upload-r2.sh [file ...]   (default: every build/releases/*.vmwarevm.zip plus SHA256SUMS.txt)
 # Settings come from an env file (default build/local/r2.env, git-ignored; override with R2_ENV_FILE):
 #   R2_ACCESS_KEY_ID  R2_SECRET_ACCESS_KEY  R2_ENDPOINT  R2_BUCKET  R2_PUBLIC_BASE
 set -euo pipefail
@@ -18,7 +18,7 @@ command -v aws >/dev/null || { echo "FATAL: aws CLI not found (brew install awsc
 export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY" AWS_DEFAULT_REGION=auto
 export AWS_REQUEST_CHECKSUM_CALCULATION=when_required AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
 
-if [ "$#" -gt 0 ]; then FILES=("$@"); else FILES=("$REPO"/build/releases/*.ova "$REPO"/build/releases/SHA256SUMS.txt); fi
+if [ "$#" -gt 0 ]; then FILES=("$@"); else FILES=("$REPO"/build/releases/*.vmwarevm.zip "$REPO"/build/releases/SHA256SUMS.txt); fi
 [ -e "${FILES[0]}" ] || { echo "FATAL: nothing to upload" >&2; exit 1; }
 
 SUMS="$REPO/build/releases/SHA256SUMS.txt"

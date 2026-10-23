@@ -20,6 +20,7 @@ mkdir -m 0700 "$WORK" || exit 125
 mkdir -m 0755 "$OUT" || exit 125
 : >"$REPORT"
 chmod 0644 "$REPORT"
+printf 'started-epoch: %s\n' "$(date +%s)" >>"$REPORT"
 
 fail() { FAILS=$((FAILS + 1)); }
 say() { printf '%s\n' "$*"; printf '%s\n' "$*" >>"$REPORT"; }

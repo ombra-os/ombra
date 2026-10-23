@@ -45,6 +45,7 @@ vmx_set sata0:0.deviceType        cdrom-raw # image -> empty physical drive
 vmx_set sata0:0.fileName          "auto detect"
 vmx_set sata0:0.startConnected    false     # no media at any boot, ever
 vmx_set bios.bootOrder            "hdd,cdrom"
+vmx_set snapshot.disabled        TRUE      # no snapshots: they keep old disk states and RAM on the host
 
 # install-time debug channels never ship: strip any VNC keys from the vmx
 if grep -qE '^(RemoteDisplay|serial[0-9]+)\.' "$VMX"; then

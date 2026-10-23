@@ -160,8 +160,13 @@ ln -sf /etc/machine-id /target/var/lib/dbus/machine-id
 
 # Tor-only time sync through the gateway (units ship in the overlay)
 in-target systemctl enable ombra-timesync.timer >/dev/null 2>&1 || true
+chmod 0755 /target/usr/local/sbin/ombra-update /target/usr/local/bin/ombra-update-notify /target/usr/local/bin/ombra-update-gui
+in-target systemctl enable ombra-update-check.timer ombra-update-commit.timer >/dev/null 2>&1 || true
 # the desktop's own default-drop firewall (ruleset ships in the overlay)
 in-target systemctl enable nftables.service >/dev/null 2>&1 || true
+# transfer-session disks: fixed mounts, no desktop automount stack (units ship in the overlay)
+in-target systemctl enable mnt-transfer-shared.automount >/dev/null 2>&1 \
+    || ombra_fatal "systemctl enable failed for the transfer mounts"
 
 # no further enables here: packages enable their own units (an early enable would no-op)
 
@@ -256,6 +261,12 @@ user_pref("app.update.silent", false);
 user_pref("extensions.update.enabled", false);
 user_pref("intl.language_notification.shown", true);
 user_pref("intl.locale.requested", "en-US");
+user_pref("browser.download.folderList", 2);
+user_pref("browser.download.dir", "/home/ombra/Downloads");
+user_pref("browser.download.useDownloadDir", true);
+user_pref("widget.use-xdg-desktop-portal.file-picker", 0);
+user_pref("widget.use-xdg-desktop-portal.mime-handler", 0);
+user_pref("widget.use-xdg-desktop-portal.open-uri", 0);
 JS
         if [ ! -e /target/opt/tor-browser/Browser/distribution/policies.json ]; then
             cat > /target/opt/tor-browser/Browser/distribution/policies.json <<'JS'
@@ -307,6 +318,77 @@ SH
     fi
 fi
 
+phase "apps-begin"
+# ---- privacy applications ----------------------------------------------------
+# Runs INSIDE the soft subshell: a failure writes a flag file for the fatal section below.
+rm -f /tmp/ombra-apps-fail
+
+# Debian packages, one transaction, recommends off: Kleopatra (OpenPGP), OnionShare (through the gateway's onion-service
+# broker), Electrum (bitcoin); squashfs-tools stays for tooling that unpacks AppImages
+in-target apt-get install -y -o Acquire::Retries=3 -o APT::Install-Recommends=false \
+    -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-unsafe-io \
+    kleopatra pinentry-qt scdaemon onionshare electrum squashfs-tools proxychains4 \
+    >/dev/null 2>&1 \
+    || echo "ombra-apps: the Debian application packages did not install" > /tmp/ombra-apps-fail
+# onionshare-cli depends on the tor package: the desktop must never run a Tor of its own, the gateway is the only Tor
+for u in tor.service tor@default.service tor@.service; do
+    in-target systemctl mask "$u" 2>/dev/null || true
+done
+in-target systemctl enable ombra-socks.socket >/dev/null 2>&1 \
+    || echo "ombra-apps: could not enable the local SOCKS forwarder" > /tmp/ombra-apps-fail
+# the GnuPG and Electrum homes are 0700 / private; git cannot carry modes on directories
+in-target chmod 0700 /etc/skel/.gnupg /home/ombra/.gnupg 2>/dev/null || true
+in-target chown -R ombra:ombra /home/ombra/.gnupg /home/ombra/.electrum /home/ombra/.config/onionshare /home/ombra/.config/feather 2>/dev/null || true
+
+# pinned upstream builds: staged from build/vendor, sha256 re-verified here before anything runs
+verify_staged() {  # $1 app -> sets APP_FILE (full path) or returns 1
+    app_pin="/ombra/vendor/$1.sha256"
+    app_name="$(awk -F= '$1=="file"{print $2}' "$app_pin" 2>/dev/null || true)"
+    app_want="$(awk -F= '$1=="sha256"{print $2}' "$app_pin" 2>/dev/null || true)"
+    APP_FILE="/ombra/vendor/$app_name"
+    [ -n "$app_name" ] && [ -f "$APP_FILE" ] || { echo "ombra-apps: $1 payload missing from the ISO" > /tmp/ombra-apps-fail; return 1; }
+    app_got="$(sha256sum "$APP_FILE" 2>/dev/null | awk '{print $1}')"
+    [ -n "$app_want" ] && [ "$app_got" = "$app_want" ] \
+        || { echo "ombra-apps: $1 sha256 mismatch ($app_got != $app_want)" > /tmp/ombra-apps-fail; return 1; }
+    return 0
+}
+
+# Feather: unpack the AppImage into /opt/feather (no FUSE on the desktop, nothing mounts at run time)
+if verify_staged feather; then
+    mkdir -p /target/opt/feather /target/var/tmp
+    cp "$APP_FILE" /target/var/tmp/feather.AppImage
+    chmod 0755 /target/var/tmp/feather.AppImage
+    in-target sh -c 'cd /var/tmp && ./feather.AppImage --appimage-extract >/dev/null 2>&1 && cp -a squashfs-root/. /opt/feather/ && rm -rf squashfs-root feather.AppImage' \
+        || echo "ombra-apps: Feather would not unpack" > /tmp/ombra-apps-fail
+    in-target chmod -R a+rX /opt/feather 2>/dev/null || true
+    [ -x /target/opt/feather/usr/bin/feather ] || echo "ombra-apps: Feather is not installed" > /tmp/ombra-apps-fail
+fi
+
+# SimpleX: upstream .deb (bundles its own Java runtime); apt resolves its library dependencies
+if verify_staged simplex; then
+    cp "$APP_FILE" /target/var/tmp/simplex.deb
+    in-target apt-get install -y -o Acquire::Retries=3 -o APT::Install-Recommends=false \
+        -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-unsafe-io /var/tmp/simplex.deb \
+        >/dev/null 2>&1 \
+        || echo "ombra-apps: SimpleX did not install" > /tmp/ombra-apps-fail
+    rm -f /target/var/tmp/simplex.deb
+    [ -x /target/opt/simplex/bin/simplex ] || echo "ombra-apps: SimpleX is not installed" > /tmp/ombra-apps-fail
+    # the package ships a bare launcher entry (Name=simplex, Categories=Unknown) that runs the binary directly:
+    # replace it with one that goes through the proxychains wrapper (every connection through the gateway's Tor)
+    cat > /target/usr/local/share/applications/simplex-simplex.desktop <<'DESK'
+[Desktop Entry]
+Type=Application
+Name=SimpleX Chat
+Comment=Private messenger with no accounts or phone numbers, routed through Tor
+Exec=/usr/local/bin/simplex
+Icon=/opt/simplex/lib/simplex.png
+Terminal=false
+Categories=Network;InstantMessaging;
+Keywords=chat;messenger;simplex
+DESK
+fi
+in-target update-desktop-database >/dev/null 2>&1 || true
+
 ) || echo "WARN(non-critical, re-applied post-install): soft section had failures"
 
 # the session stack IS the desktop: a failed transaction must park the
@@ -318,6 +400,13 @@ fi
 
 if awk -F: '$1=="sudo"{n=split($4,m,","); for(i=1;i<=n;i++) if(m[i]=="ombra") f=1} END{exit f?0:1}' /target/etc/group; then
     ombra_fatal "ombra is still in the sudo group"
+fi
+
+# the privacy applications ship with the image: never release a desktop that is missing one
+if [ -e /tmp/ombra-apps-fail ]; then
+    apps_reason="$(cat /tmp/ombra-apps-fail)"
+    rm -f /tmp/ombra-apps-fail
+    ombra_fatal "$apps_reason — the privacy applications are part of the image; not shipping without them"
 fi
 
 # Tor Browser is not re-appliable: abort outside the soft subshell if

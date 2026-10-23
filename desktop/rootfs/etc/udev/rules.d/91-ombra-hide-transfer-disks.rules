@@ -1,0 +1,2 @@
+# the shared disk is mounted by systemd for the Shared Folder place; the raw device only confuses Dolphin
+ENV{ID_FS_LABEL}=="OMBRA-SHARE", ENV{UDISKS_IGNORE}="1"

@@ -1,0 +1,15 @@
+[Unit]
+Description=Check for an Ombra update through Tor
+After=network-online.target tor@default.service
+Wants=network-online.target
+StartLimitIntervalSec=1h
+StartLimitBurst=8
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ombra-update check
+TimeoutStartSec=300
+Restart=on-failure
+RestartSec=120
+RestartPreventExitStatus=1 2
+SuccessExitStatus=0

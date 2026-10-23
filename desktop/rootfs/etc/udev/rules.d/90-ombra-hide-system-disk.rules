@@ -1,0 +1,3 @@
+# the system disk and its LUKS mapping are not user media; Dolphin errors when asked to open them
+KERNEL=="nvme[0-9]*", ENV{UDISKS_IGNORE}="1"
+KERNEL=="dm-[0-9]*", ENV{UDISKS_IGNORE}="1"

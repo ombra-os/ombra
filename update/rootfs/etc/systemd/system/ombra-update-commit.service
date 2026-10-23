@@ -1,0 +1,7 @@
+[Unit]
+Description=Drop the update rollback point after a healthy boot
+ConditionPathExists=/var/lib/ombra-update/pending
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ombra-update commit

@@ -1,0 +1,12 @@
+{
+  "connection_type": "control_port",
+  "control_port_address": "10.55.10.1",
+  "control_port_port": 9052,
+  "socks_address": "10.55.10.1",
+  "socks_port": 9050,
+  "auth_type": "no_auth",
+  "auth_password": "",
+  "auto_connect": true,
+  "use_autoupdate": false,
+  "bridges_enabled": false
+}

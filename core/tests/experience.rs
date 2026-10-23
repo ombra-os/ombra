@@ -84,9 +84,21 @@ fn happy_path_from_welcome_to_reboot() {
     app.begin_apply();
     let (disk, user) = app.secrets().expect("secrets ready to apply");
 
-    let mut fake = FakeApplier { calls: Vec::new(), fail_at: None };
+    let mut fake = FakeApplier {
+        calls: Vec::new(),
+        fail_at: None,
+    };
     run_apply(&mut fake, BUILD_PASSPHRASE.as_bytes(), &disk, &user).expect("apply ok");
-    assert_eq!(fake.calls, vec!["disk_state", "set_user_password", "add_user_key", "reencrypt", "verify_sealed"]);
+    assert_eq!(
+        fake.calls,
+        vec![
+            "disk_state",
+            "set_user_password",
+            "add_user_key",
+            "reencrypt",
+            "verify_sealed"
+        ]
+    );
 
     app.apply_succeeded();
     assert_eq!(app.screen(), Screen::Rebooting);
@@ -114,9 +126,21 @@ fn failed_rotation_returns_to_screen_two_and_retry_succeeds() {
     assert_eq!(app.on_key(key(KeyCode::Enter)), Action::StartApply);
     app.begin_apply();
     let (disk, user) = app.secrets().unwrap();
-    let mut fake = FakeApplier { calls: Vec::new(), fail_at: None };
+    let mut fake = FakeApplier {
+        calls: Vec::new(),
+        fail_at: None,
+    };
     run_apply(&mut fake, BUILD_PASSPHRASE.as_bytes(), &disk, &user).unwrap();
-    assert_eq!(fake.calls, vec!["disk_state", "set_user_password", "add_user_key", "reencrypt", "verify_sealed"]);
+    assert_eq!(
+        fake.calls,
+        vec![
+            "disk_state",
+            "set_user_password",
+            "add_user_key",
+            "reencrypt",
+            "verify_sealed"
+        ]
+    );
 }
 
 #[test]
@@ -131,12 +155,16 @@ fn renders_every_screen_across_console_sizes() {
             (
                 (0..buf.area.height)
                     .map(|y| {
-                        (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>()
+                        (0..buf.area.width)
+                            .map(|x| buf[(x, y)].symbol())
+                            .collect::<String>()
                     })
                     .collect::<Vec<_>>(),
                 (0..buf.area.height)
                     .map(|y| {
-                        (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>()
+                        (0..buf.area.width)
+                            .map(|x| buf[(x, y)].symbol())
+                            .collect::<String>()
                     })
                     .collect::<Vec<_>>()
                     .join("\n"),

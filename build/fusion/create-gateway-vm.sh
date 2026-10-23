@@ -210,6 +210,6 @@ else
 - After poweroff, run: bash build/fusion/post-install-gateway.sh
   (connects NIC2, detaches the installer CD, disk-first boot, starts the VM)
 - Check the gateway's console health report, then power off and run
-  bash build/fusion/export-release-image.sh gateway to build the OVA.
+  bash build/fusion/export-bundle.sh gateway to build the release archive.
 RB
 fi

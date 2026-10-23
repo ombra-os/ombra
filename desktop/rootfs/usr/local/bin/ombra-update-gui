@@ -1,0 +1,51 @@
+#!/bin/sh
+# Update Ombra: native dialogs around `ombra-update apply`, so nothing depends on terminal colors.
+T="Update Ombra"
+
+if [ "${1:-}" = --undo ]; then
+    kdialog --title "$T" --yes-label "Undo the update" --no-label "Cancel" --warningyesno "This puts Ombra back to the version before the last update. It is only possible until ten minutes after the restart that followed the update.\n\nYour files and settings are not touched." 2>/dev/null || exit 0
+    out=$(mktemp /tmp/ombra-update.XXXXXX); trap 'rm -f "$out"' EXIT
+    pkexec /usr/local/sbin/ombra-update rollback >"$out" 2>&1; rc=$?
+    if [ "$rc" = 0 ]; then
+        kdialog --title "$T" --yes-label "Restart now" --no-label "Later" --yesno "The previous version is restored once you restart.\n\nRestart twice before updating again, and choose Persistent each time." 2>/dev/null && systemctl reboot
+    else
+        kdialog --title "$T" --sorry "There is nothing to undo, or the password was not accepted.\n\n$(grep -v 'leaked on\|^$' "$out" | tail -n 4)" 2>/dev/null
+    fi
+    exit 0
+fi
+state=$(head -n1 /run/ombra/update 2>/dev/null)
+ver=$(sed -n 2p /run/ombra/update 2>/dev/null)
+cur=$(cat /etc/ombra/version 2>/dev/null)
+case "$ver" in ''|*[!0-9A-Za-z.+~-]*) ver="" ;; esac
+
+if [ "$state" != available ] || [ -z "$ver" ]; then
+    kdialog --title "$T" --msgbox "Ombra is up to date.\n\nIt looks for updates a few minutes after each start and once a day, through Tor." 2>/dev/null
+    exit 0
+fi
+
+grep -q 'overlayroot=tmpfs' /proc/cmdline && {
+    kdialog --title "$T" --sorry "Ombra $ver is available, but this session is Amnesic, so it can't be updated.\n\nRestart, choose Persistent at the boot menu, and open Update Ombra again." 2>/dev/null
+    exit 0
+}
+
+kdialog --title "$T" --yes-label "Update now" --no-label "Not now" --yesno "Ombra $ver is available. You have $cur.\n\nThe update is downloaded through Tor and checked against Ombra's signature before anything is changed. Your files and settings stay as they are.\n\nIt takes a few minutes. When it is done, you restart once to finish." 2>/dev/null || exit 0
+
+out=$(mktemp /tmp/ombra-update.XXXXXX)
+trap 'rm -f "$out"' EXIT
+kdialog --title "$T" --passivepopup "Updating Ombra. Please keep this machine on." 8 2>/dev/null &
+pkexec /usr/local/sbin/ombra-update apply >"$out" 2>&1
+rc=$?
+clean=$(grep -v 'leaked on\|^$' "$out" | tail -n 8)
+
+case "$rc" in
+    0)
+        kdialog --title "$T" --yes-label "Restart now" --no-label "Later" --yesno "Ombra is updated to $ver.\n\nRestart to finish. Choose Persistent at the boot menu.\n\nIf anything seems wrong after restarting, you can undo it for ten minutes after the restart: right-click Update Ombra in the application menu and choose Undo last update." 2>/dev/null \
+            && systemctl reboot
+        ;;
+    126|127)
+        kdialog --title "$T" --sorry "The update was not started.\n\nThe password was not accepted, or the window was closed. Nothing was changed. Open Update Ombra to try again." 2>/dev/null
+        ;;
+    *)
+        kdialog --title "$T" --error "The update did not finish. Nothing was left half-applied.\n\n$clean" 2>/dev/null
+        ;;
+esac

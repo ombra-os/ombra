@@ -1,0 +1,42 @@
+#!/bin/sh
+# Tell the user when the boot-time check found an update, and again every six hours until it is applied.
+# The check runs as root a few minutes after boot and daily; KDE shows the notice until it is dismissed,
+# and clicking it opens Update Ombra.
+LOCK="${XDG_RUNTIME_DIR:-/tmp}/ombra-update-notify.pid"
+IDFILE="${XDG_RUNTIME_DIR:-/tmp}/ombra-update-notice.id"
+
+# one watcher per session
+if [ -r "$LOCK" ] && kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then exit 0; fi
+echo $$ > "$LOCK"
+trap 'rm -f "$LOCK" "$IDFILE"; kill 0 2>/dev/null' EXIT
+
+# a click on the notice (KDE reports it as the "default" action) opens the updater; clicks on anyone else's notices are ignored
+busctl --user monitor --json=short \
+    --match "type='signal',interface='org.freedesktop.Notifications',member='ActionInvoked'" 2>/dev/null |
+while IFS= read -r line; do
+    id=$(cat "$IDFILE" 2>/dev/null)
+    case "$id" in ''|*[!0-9]*) continue ;; esac
+    case "$line" in
+        *'"data":['"$id"',"default"]'*) /usr/local/bin/ombra-update-gui & ;;
+    esac
+done &
+
+notify() {
+    # replace the previous notice rather than stacking a new one next to it
+    prev=$(cat "$IDFILE" 2>/dev/null); case "$prev" in ''|*[!0-9]*) prev=0 ;; esac
+    busctl --user call org.freedesktop.Notifications /org/freedesktop/Notifications org.freedesktop.Notifications Notify \
+        susssasa{sv}i "Ombra" "$prev" "system-software-update" "A new version of Ombra is available" \
+        "Click here, or open Update Ombra from the application menu. Updates need Persistent mode." \
+        2 default "Update Ombra" 0 0 2>/dev/null | awk '{print $2}' > "$IDFILE"
+}
+
+told=0
+while :; do
+    if [ "$(head -n1 /run/ombra/update 2>/dev/null)" = available ]; then
+        if [ "$told" -eq 0 ] || [ "$told" -ge 1080 ]; then notify; told=0; fi
+        told=$((told + 1))
+    else
+        told=0
+    fi
+    sleep 20
+done

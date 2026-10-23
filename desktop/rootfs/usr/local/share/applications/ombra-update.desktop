@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Update Ombra
+GenericName=System update
+Comment=Download, verify and apply an Ombra update through Tor
+Exec=/usr/local/bin/ombra-update-gui
+Icon=system-software-update
+Terminal=false
+Categories=System;
+Actions=Undo;
+
+[Desktop Action Undo]
+Name=Undo last update
+Exec=/usr/local/bin/ombra-update-gui --undo
+Icon=edit-undo

@@ -14,10 +14,10 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::{Frame, Terminal};
 
 use ombra_boot::askpass::{self, AskRequest};
+use ombra_boot::fb::{self, UiBackend};
 use ombra_boot::input::{byte_to_key, FieldEvent, KeyReader, SecretBuf, SecretField, Severity};
 use ombra_boot::keyscript;
 use ombra_boot::term;
-use ombra_boot::fb::{self, UiBackend};
 use ombra_boot::{art, theme, BUILD_PASSPHRASE};
 
 /// A quiet window this long after an answer means the disk opened.
@@ -66,7 +66,8 @@ impl Agent {
 fn build_key_is_dead() -> bool {
     use std::io::Write as _;
     use std::process::{Command, Stdio};
-    let Some(source) = std::env::var_os("CRYPTTAB_SOURCE").and_then(|s| s.into_string().ok()) else {
+    let Some(source) = std::env::var_os("CRYPTTAB_SOURCE").and_then(|s| s.into_string().ok())
+    else {
         return false;
     };
     let device = match source.strip_prefix("UUID=") {
@@ -164,14 +165,16 @@ fn run() -> Result<()> {
                 let tty = term::TtyHandle::open().context("opening the boot tty")?;
                 let fd = tty.raw_fd();
                 let keys = KeyReader::from_tty(&tty);
-                let (backend, (rows, cols)) =
-                    fb::open_backend(tty, "ombra-askpass").context("drawing backend on the boot tty")?;
+                let (backend, (rows, cols)) = fb::open_backend(tty, "ombra-askpass")
+                    .context("drawing backend on the boot tty")?;
                 screen_fd = Some(fd);
                 grid = Some((rows, cols));
                 let area = ratatui::layout::Rect::new(0, 0, cols, rows);
                 let mut t = Terminal::with_options(
                     backend,
-                    ratatui::TerminalOptions { viewport: ratatui::Viewport::Fixed(area) },
+                    ratatui::TerminalOptions {
+                        viewport: ratatui::Viewport::Fixed(area),
+                    },
                 )
                 .context("terminal backend on the boot tty")?;
                 t.clear().context("clearing the console")?;
@@ -196,11 +199,15 @@ fn run() -> Result<()> {
                 agent.field.set_caret(agent.caret_phase);
                 last_caret = Instant::now();
                 if let Some(terminal) = screen.as_mut() {
-                    terminal.draw(|f| draw(f, &agent)).context("drawing the unlock screen")?;
+                    terminal
+                        .draw(|f| draw(f, &agent))
+                        .context("drawing the unlock screen")?;
                 }
             }
             if let Some(terminal) = screen.as_mut() {
-                terminal.draw(|f| draw(f, &agent)).context("drawing the decrypt screen")?;
+                terminal
+                    .draw(|f| draw(f, &agent))
+                    .context("drawing the decrypt screen")?;
             }
             match step(&mut agent, &requests)? {
                 StepOutcome::Continue => {}
@@ -269,8 +276,7 @@ fn step(agent: &mut Agent, requests: &[AskRequest]) -> Result<StepOutcome> {
             if let Some((path, since)) = agent.answered.clone() {
                 let wrong = requests.iter().any(|r| r.path != path);
                 if wrong {
-                    agent.retry =
-                        Some("that passphrase didn't decrypt - try again".to_string());
+                    agent.retry = Some("that passphrase didn't decrypt - try again".to_string());
                     agent.field.clear();
                     agent.answered = None;
                 } else if requests.is_empty() && since.elapsed() >= GRACE {
@@ -305,7 +311,10 @@ fn on_key(agent: &mut Agent, k: KeyEvent) {
 fn draw_chrome(f: &mut Frame, title: &str) -> theme::ScreenLayout {
     let area = f.area();
     let l = theme::layout(area);
-    f.render_widget(art::Ring::for_console(l.ring.height.max(area.height.min(40))), l.ring);
+    f.render_widget(
+        art::Ring::for_console(l.ring.height.max(area.height.min(40))),
+        l.ring,
+    );
     theme::put_wordmark(f, l.brand, theme::FIELD_WIDTH);
     theme::put_centered(f, l.title, title, theme::fg(theme::LABEL));
     l
@@ -315,7 +324,12 @@ fn splash_frame(f: &mut Frame, pulse: usize) {
     let l = draw_chrome(f, "starting your private machine");
     let pulse_chars: [char; 6] = [' ', '.', 'o', 'O', 'o', '.'];
     let dot = pulse_chars[pulse % pulse_chars.len()].to_string();
-    theme::put_centered(f, theme::row_in(l.content, 1), &dot, theme::fg(theme::RING_DIM));
+    theme::put_centered(
+        f,
+        theme::row_in(l.content, 1),
+        &dot,
+        theme::fg(theme::RING_DIM),
+    );
 }
 
 fn unlock_frame(f: &mut Frame, field: &SecretField, message: Option<(&str, Severity)>) {
@@ -329,7 +343,12 @@ fn unlock_frame(f: &mut Frame, field: &SecretField, message: Option<(&str, Sever
         "enter your passphrase to decrypt your disk",
         theme::fg(theme::TEXT),
     );
-    let box1 = ratatui::layout::Rect { x: field_rect.x, y: c.y + 1, width: field_rect.width, height: 3 };
+    let box1 = ratatui::layout::Rect {
+        x: field_rect.x,
+        y: c.y + 1,
+        width: field_rect.width,
+        height: 3,
+    };
     f.render_widget(field, box1);
     let mut row = c.y + 4;
     if let Some((msg, sev)) = message {
@@ -338,7 +357,12 @@ fn unlock_frame(f: &mut Frame, field: &SecretField, message: Option<(&str, Sever
             Severity::Muted => theme::MUTED,
         };
         let msg = theme::truncate(msg, field_rect.width as usize);
-        theme::put_left(f, theme::line_rect(c, field_rect.x, row), &msg, theme::fg(color));
+        theme::put_left(
+            f,
+            theme::line_rect(c, field_rect.x, row),
+            &msg,
+            theme::fg(color),
+        );
         row += 1;
     }
     theme::put_left(
@@ -385,11 +409,18 @@ impl KeyscriptTty {
         let area = ratatui::layout::Rect::new(0, 0, cols, rows);
         let mut terminal = Terminal::with_options(
             backend,
-            ratatui::TerminalOptions { viewport: ratatui::Viewport::Fixed(area) },
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Fixed(area),
+            },
         )
         .ok()?;
         terminal.clear().ok()?;
-        Some(KeyscriptTty { terminal, fd, grid: (rows, cols), keys })
+        Some(KeyscriptTty {
+            terminal,
+            fd,
+            grid: (rows, cols),
+            keys,
+        })
     }
 
     fn refollow(&mut self) {
@@ -416,7 +447,8 @@ impl keyscript::KeyscriptUi for KeyscriptTty {
 
     fn next_key(&mut self) -> io::Result<Option<KeyEvent>> {
         // bounded wait; a silent tty yields None at the poll tick
-        self.keys.next_key(Duration::from_millis(theme::KEY_POLL_MS))
+        self.keys
+            .next_key(Duration::from_millis(theme::KEY_POLL_MS))
     }
 
     fn tick_wait(&mut self, d: Duration) {
@@ -434,8 +466,22 @@ fn keyscript_main(args: &[String]) -> Result<()> {
     let tui = KeyscriptTty::new();
     let mut out = io::stdout().lock();
     match tui {
-        Some(ui) => keyscript::run(&mut out, &marker, &mut { ui }, BUILD_PASSPHRASE, keyscript::SPLASH, &mut build_key_is_dead)?,
-        None => keyscript::run(&mut out, &marker, &mut HeadlessUi::new(), BUILD_PASSPHRASE, keyscript::SPLASH, &mut build_key_is_dead)?,
+        Some(ui) => keyscript::run(
+            &mut out,
+            &marker,
+            &mut { ui },
+            BUILD_PASSPHRASE,
+            keyscript::SPLASH,
+            &mut build_key_is_dead,
+        )?,
+        None => keyscript::run(
+            &mut out,
+            &marker,
+            &mut HeadlessUi::new(),
+            BUILD_PASSPHRASE,
+            keyscript::SPLASH,
+            &mut build_key_is_dead,
+        )?,
     }
     // NO leave_screen: the alt screen must survive cryptroot's re-invocations
     Ok(())
@@ -456,7 +502,12 @@ impl HeadlessUi {
             .write(true)
             .custom_flags(0o400000) // O_NOCTTY on Linux
             .open("/dev/tty1")
-            .or_else(|_| std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty"))
+            .or_else(|_| {
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open("/dev/tty")
+            })
             .ok();
         let mut saved_termios = None;
         if let Some(f) = tty.as_ref() {
@@ -535,13 +586,19 @@ fn drain_prompt_from_stdin() -> Option<String> {
                 }
             }
         });
-    reader.ok().and_then(|_| rx.recv_timeout(Duration::from_millis(500)).ok())
+    reader
+        .ok()
+        .and_then(|_| rx.recv_timeout(Duration::from_millis(500)).ok())
 }
 
 /// Best-effort static error frame; the stock fallback agent covers the front door.
 fn draw_fatal(e: &anyhow::Error) {
-    let Ok(mut writer) = term::open_writer() else { return };
-    let Ok(_raw) = term::RawGuard::new() else { return };
+    let Ok(mut writer) = term::open_writer() else {
+        return;
+    };
+    let Ok(_raw) = term::RawGuard::new() else {
+        return;
+    };
     if term::enter_screen(writer.as_mut()).is_err() {
         return;
     }
@@ -552,7 +609,12 @@ fn draw_fatal(e: &anyhow::Error) {
             theme::put_wordmark(f, l.brand, theme::FIELD_WIDTH);
             theme::put_centered(f, l.title, "something went wrong", theme::fg(theme::BAD));
             let detail = theme::truncate(&format!("{e:#}"), 70);
-            theme::put_centered(f, theme::row_in(l.content, 1), &detail, theme::fg(theme::MUTED));
+            theme::put_centered(
+                f,
+                theme::row_in(l.content, 1),
+                &detail,
+                theme::fg(theme::MUTED),
+            );
             theme::put_centered(
                 f,
                 l.footer,

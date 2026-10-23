@@ -1,0 +1,2 @@
+#!/bin/sh
+exec proxychains4 -q -f /etc/ombra/proxychains.conf /opt/simplex/bin/simplex "$@"

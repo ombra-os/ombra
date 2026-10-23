@@ -22,7 +22,7 @@ body:
     id: source
     attributes:
       label: How was it installed
-      options: [Release OVA, Built from source]
+      options: [Release image (.vmwarevm), Built from source]
     validations:
       required: true
   - type: input

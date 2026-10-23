@@ -55,8 +55,10 @@ done
 [ -n "$IN_LIST" ] || \
     die "$VMX is not in vmrun list — power it on in Fusion first (never from here)"
 
-# a stale report left in the guest would masquerade as this run's output
-gop runProgramInGuest "$VMX" /bin/rm -f "$GUEST_REPORT" \
+# the probe deletes and recreates its report directory as root, and stamps it with its start time; the host cannot
+# remove a stale root-owned report, so a report is only trusted if its stamp is from this run
+BEFORE=$(date +%s)
+gop listProcessesInGuest "$VMX" >/dev/null \
     || die "guest ops failed (vmrun error above; open-vm-tools live? OMBRA_GUEST_USER/OMBRA_GUEST_PASS right?)"
 
 echo "running the shipped probe as root (no streaming output — the report prints when it returns)"
@@ -68,6 +70,11 @@ HOST_REPORT=$(umask 077; mktemp "${TMPDIR:-/tmp}/ombra-leak-report.XXXXXX") || d
 if ! gop CopyFileFromGuestToHost "$VMX" "$GUEST_REPORT" "$HOST_REPORT"; then
     rm -f "$HOST_REPORT"
     die "no report came back — the probe never ran (vmrun failure, not a probe result)"
+fi
+STARTED=$(sed -n 's/^started-epoch: \([0-9][0-9]*\)$/\1/p' "$HOST_REPORT" | head -1)
+if [ -z "$STARTED" ] || [ "$STARTED" -lt $((BEFORE - 60)) ]; then
+    rm -f "$HOST_REPORT"
+    die "the report in the guest is stale (the probe did not run this time; sudo or vmrun failed)"
 fi
 echo
 echo "==== probe report (guest:$GUEST_REPORT) ===="

@@ -44,12 +44,15 @@ fn run() -> Result<()> {
     let _raw = term::RawGuard::new().context("raw mode (need the boot tty)")?;
     let tty = term::TtyHandle::open().context("opening the boot tty")?;
     let tty_fd = tty.raw_fd();
-    let (backend, (rows, cols)) = fb::open_backend(tty, "ombra-welcome").context("drawing backend on the boot tty")?;
+    let (backend, (rows, cols)) =
+        fb::open_backend(tty, "ombra-welcome").context("drawing backend on the boot tty")?;
     let mut grid = (rows, cols);
     let area = ratatui::layout::Rect::new(0, 0, cols, rows);
     let mut terminal = Terminal::with_options(
         backend,
-        ratatui::TerminalOptions { viewport: ratatui::Viewport::Fixed(area) },
+        ratatui::TerminalOptions {
+            viewport: ratatui::Viewport::Fixed(area),
+        },
     )
     .context("terminal backend on the boot tty")?;
     terminal.clear().context("clearing the console")?;
@@ -64,7 +67,9 @@ fn run() -> Result<()> {
     };
     let mut last_pulse = Instant::now();
     let mut last_caret = Instant::now();
-    terminal.draw(|f| welcome::draw(f, &app)).context("drawing")?;
+    terminal
+        .draw(|f| welcome::draw(f, &app))
+        .context("drawing")?;
 
     loop {
         // the viewport is fixed at the startup grid; a Fusion resize changes the console grid under us
@@ -89,7 +94,9 @@ fn run() -> Result<()> {
                         }
                         welcome::Action::Restart => {
                             app.begin_restart();
-                            terminal.draw(|f| welcome::draw(f, &app)).context("drawing")?;
+                            terminal
+                                .draw(|f| welcome::draw(f, &app))
+                                .context("drawing")?;
                             return restart(&mut terminal, &app);
                         }
                         welcome::Action::None => {}
@@ -106,7 +113,9 @@ fn run() -> Result<()> {
             app.tick_caret();
             last_caret = Instant::now();
         }
-        terminal.draw(|f| welcome::draw(f, &app)).context("drawing")?;
+        terminal
+            .draw(|f| welcome::draw(f, &app))
+            .context("drawing")?;
     }
 }
 
@@ -172,10 +181,7 @@ fn apply(
     restart(terminal, app)
 }
 
-fn restart(
-    terminal: &mut Terminal<UiBackend>,
-    app: &Welcome,
-) -> Result<()> {
+fn restart(terminal: &mut Terminal<UiBackend>, app: &Welcome) -> Result<()> {
     // if reboot fails, fall through to the forced reboot
     if let Err(e) = welcome::reboot() {
         eprintln!("ombra-welcome: {e:#}");
@@ -205,8 +211,12 @@ fn brief(detail: &str) -> String {
 
 /// Best-effort static error frame; the unit is Restart=on-failure.
 fn draw_fatal(e: &anyhow::Error) {
-    let Ok(mut writer) = term::open_writer() else { return };
-    let Ok(_raw) = term::RawGuard::new() else { return };
+    let Ok(mut writer) = term::open_writer() else {
+        return;
+    };
+    let Ok(_raw) = term::RawGuard::new() else {
+        return;
+    };
     if term::enter_screen(writer.as_mut()).is_err() {
         return;
     }

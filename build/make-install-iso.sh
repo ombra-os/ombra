@@ -91,6 +91,10 @@ if [ "$TARGET" = desktop ]; then
     stage_pinned torbrowser "$(awk -F= '$1=="file"{print $2}' "$REPO/build/pins/torbrowser.txt")"
     # the expected hash travels INTO the initrd for the in-installer re-verify
     cp "$REPO/build/pins/torbrowser.txt" "$STAGE/initrd/ombra/vendor/torbrowser.sha256"
+    for app in feather simplex; do
+        stage_pinned "$app" "$(awk -F= '$1=="file"{print $2}' "$REPO/build/pins/$app.txt")"
+        cp "$REPO/build/pins/$app.txt" "$STAGE/initrd/ombra/vendor/$app.sha256"
+    done
 fi
 
 # redundant overlay delivery: d-i executes this hook natively, same stamp guard as preseed/late_command.
@@ -137,9 +141,16 @@ if [ -d "$REPO/core/dist/aarch64" ]; then
 fi
 
 # --uid 0 --gid 0: uid-501 sudoers drop-ins are silently dropped by sudo; AppleDouble ._ members and .DS_Store must never ship.
+# the updater overlay (shared by both machines) and the release public key ride in the same tarball
+UPDATE_PUBKEY="${OMBRA_UPDATE_PUBKEY:-$REPO/build/update-pubkey.pem}"
+[ -f "$UPDATE_PUBKEY" ] || { echo "FATAL: update public key missing: $UPDATE_PUBKEY (scripts/update/keygen.sh creates the pair)" >&2; exit 1; }
+openssl pkey -pubin -in "$UPDATE_PUBKEY" -noout 2>/dev/null || { echo "FATAL: $UPDATE_PUBKEY is not a public key" >&2; exit 1; }
+mkdir -p "$STAGE/extra/usr/share/ombra"
+cp "$UPDATE_PUBKEY" "$STAGE/extra/usr/share/ombra/update-pubkey.pem"
+chmod 0644 "$STAGE/extra/usr/share/ombra/update-pubkey.pem"
 COPYFILE_DISABLE=1 tar -czf "$STAGE/initrd/ombra/rootfs.tar.gz" --uid 0 --gid 0 \
     --exclude '._*' --exclude .DS_Store \
-    -C "$REPO/$TARGET/rootfs" .
+    -C "$REPO/$TARGET/rootfs" . -C "$REPO/update/rootfs" . -C "$STAGE/extra" .
 
 ( cd "$STAGE/initrd" && find . | cpio -o -H newc --quiet | gzip ) > "$STAGE/preseed.cgz"
 

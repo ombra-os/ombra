@@ -1,0 +1,210 @@
+#!/bin/sh
+#
+# ombra-update — signed in-place updates for the Ombra desktop and gateway.
+#
+#   check      fetch the signed release index through Tor, report if a newer version exists
+#   status     print the last check result
+#   apply      download, verify and apply the update (root, Persistent mode only)
+#   rollback   undo the last update (needs a reboot)
+#   commit     drop the rollback point (runs by itself ten minutes after a healthy boot)
+#
+# Trust: every file is verified against the Ed25519 key in /usr/share/ombra/update-pubkey.pem.
+# The index is signed, it names the bundle's sha256, and the bundle's own manifest is signed too.
+# Nothing is fetched except over Tor, and nothing is applied without a human running `apply`.
+
+set -u
+export LVM_SUPPRESS_FD_WARNINGS=1
+
+CONF=/etc/ombra/update.conf
+PUBKEY=/usr/share/ombra/update-pubkey.pem
+STATE=/var/lib/ombra-update
+RUNDIR=/run/ombra
+SNAP=root-pre
+VG=vg0
+
+BASE_URL=""
+[ -r "$CONF" ] && . "$CONF"
+ROLE=$(cat /etc/ombra/role 2>/dev/null || echo unknown)
+CURRENT=$(cat /etc/ombra/version 2>/dev/null || echo 0)
+case "$ROLE" in
+    desktop) SOCKS=10.55.10.1:9050 ;;
+    gateway) SOCKS=127.0.0.1:9050 ;;
+    *) echo "ombra-update: unknown role" >&2; exit 2 ;;
+esac
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'ombra-update: %s\n' "$*" >&2; exit 1; }
+need_root() { [ "$(id -u)" = 0 ] || die "run as root (sudo ombra-update $1)"; }
+
+fetch() { # url dest; sets FETCH_CODE to the HTTP status; returns 1 on a transport failure, 22 on any non-200 answer
+    FETCH_CODE=$(curl -sS --max-time 600 --proto '=https' --tlsv1.2 --socks5-hostname "$SOCKS" -o "$2" -w '%{http_code}' "$1") || return 1
+    [ "$FETCH_CODE" = 200 ] && return 0
+    rm -f "$2"; return 22
+}
+
+verify() { # file sigfile
+    openssl pkeyutl -verify -pubin -inkey "$PUBKEY" -rawin -in "$1" -sigfile "$2" >/dev/null 2>&1
+}
+
+sha() { sha256sum "$1" | cut -d' ' -f1; }
+
+valid_value() { # only a conservative character set may reach a shell or a path
+    case "$1" in
+        ''|*[!A-Za-z0-9._:/+@=,-]*) return 1 ;;
+    esac
+    return 0
+}
+
+# kv <file> <key>: first value for key, empty if absent
+kv() { awk -F= -v k="$2" '$1==k { sub(/^[^=]*=/, ""); print; exit }' "$1"; }
+
+write_state() { mkdir -p "$RUNDIR"; printf '%s\n' "$@" > "$RUNDIR/update"; }
+
+fetch_index() { # sets IDX to a verified index file
+    mkdir -p "$STATE"
+    IDX="$STATE/latest.txt"
+    fetch "$BASE_URL/latest.txt" "$IDX.new"; c=$?
+    if [ "$c" = 22 ] && [ "$FETCH_CODE" = 404 ]; then return 3; fi   # the server answered but publishes no index (yet): nothing to update to
+    [ "$c" = 0 ] || return 1
+    fetch "$BASE_URL/latest.txt.sig" "$IDX.sig.new" || return 1
+    verify "$IDX.new" "$IDX.sig.new" || { rm -f "$IDX.new" "$IDX.sig.new"; return 2; }
+    mv "$IDX.new" "$IDX"; mv "$IDX.sig.new" "$IDX.sig"
+    return 0
+}
+
+cmd_check() {
+    [ -n "$BASE_URL" ] || die "no update URL configured"
+    rc=0; fetch_index || rc=$?
+    case "$rc" in
+        0) ;;
+        2) write_state "invalid"; die "the release index failed signature verification" ;;
+        3) write_state "current"; say "no release index published"; exit 0 ;;
+        *) write_state "unreachable"; exit 75 ;;
+    esac
+    exp=$(kv "$IDX" expires); now=$(date +%s)
+    if valid_value "${exp:-x}" && [ "$exp" -gt 0 ] 2>/dev/null && [ "$now" -gt "$exp" ]; then
+        write_state "stale"; say "release index has expired"; exit 0
+    fi
+    ver=$(kv "$IDX" "$ROLE.version")
+    valid_value "${ver:-}" || { write_state "current"; exit 0; }
+    if dpkg --compare-versions "$ver" gt "$CURRENT"; then
+        write_state "available" "$ver"; say "update available: $ver (installed $CURRENT)"
+    else
+        write_state "current"; say "up to date ($CURRENT)"
+    fi
+}
+
+cmd_status() { cat "$RUNDIR/update" 2>/dev/null || say "unknown"; }
+
+root_writable() {
+    # amnesic mode mounts / as an overlay over a read-only lower: updates must be made in Persistent mode
+    grep -q 'overlayroot=tmpfs' /proc/cmdline && return 1
+    touch /.ombra-rw-test 2>/dev/null && rm -f /.ombra-rw-test
+}
+
+cmd_apply() {
+    need_root apply
+    root_writable || die "this boot is Amnesic (or the disk is read-only): restart in Persistent mode to update"
+    [ -n "$BASE_URL" ] || die "no update URL configured"
+    [ ! -e "$STATE/pending" ] || die "an update is already waiting for a restart or a commit; run: ombra-update commit"
+    fetch_index || die "could not fetch a verified release index (is Tor up?)"
+    ver=$(kv "$IDX" "$ROLE.version"); path=$(kv "$IDX" "$ROLE.bundle"); want=$(kv "$IDX" "$ROLE.sha256")
+    valid_value "$ver" && valid_value "$path" && valid_value "$want" || die "release index is malformed"
+    dpkg --compare-versions "$ver" gt "$CURRENT" || die "already up to date ($CURRENT)"
+    say "Updating $CURRENT to $ver"
+
+    B="$STATE/bundle"; rm -rf "$B"; mkdir -p "$B"
+    fetch "$BASE_URL/$path" "$B/bundle.tar" || die "download failed"
+    [ "$(sha "$B/bundle.tar")" = "$want" ] || die "bundle checksum does not match the signed index"
+    tar -xf "$B/bundle.tar" -C "$B" manifest manifest.sig payload.tar.gz 2>/dev/null || die "bundle is malformed"
+    verify "$B/manifest" "$B/manifest.sig" || die "bundle manifest failed signature verification"
+    [ "$(kv "$B/manifest" role)" = "$ROLE" ] || die "bundle is for a different machine"
+    [ "$(kv "$B/manifest" version)" = "$ver" ] || die "bundle version does not match the index"
+    minfrom=$(kv "$B/manifest" min-from)
+    valid_value "${minfrom:-0}" && dpkg --compare-versions "$CURRENT" ge "${minfrom:-0}" || die "this update needs version ${minfrom:-?} or newer first"
+    [ "$(sha "$B/payload.tar.gz")" = "$(kv "$B/manifest" payload-sha256)" ] || die "payload does not match its signed manifest"
+    # reject absolute paths and traversal before anything touches the system
+    tar -tzf "$B/payload.tar.gz" 2>/dev/null | awk '/^\// || /(^|\/)\.\.(\/|$)/ { bad=1 } END { exit bad }' || die "payload contains unsafe paths"
+
+    free=$(df -Pk "$STATE" | awk 'NR==2{print $4}')
+    [ "$free" -gt 1048576 ] || die "not enough free space (need 1 GB)"
+
+    if [ "$ROLE" = desktop ]; then
+        if lvs --noheadings -o lv_attr "$VG/root" 2>/dev/null | grep -q '^ *O'; then
+            die "a rollback is still finishing: restart once more, then try again"
+        fi
+        lvs "$VG/$SNAP" >/dev/null 2>&1 && lvremove -fy "$VG/$SNAP" >/dev/null
+        lvcreate -s -n "$SNAP" -L 3G "$VG/root" >/dev/null || die "could not create a rollback point (no free space in the volume group; if you just rolled back, restart once and try again)"
+        say "rollback point created"
+    else
+        # the gateway has no volume manager: keep the files this update replaces
+        tar -tzf "$B/payload.tar.gz" 2>/dev/null | sed 's#^\./##; s#/$##' | while IFS= read -r f; do
+            [ -n "$f" ] && [ -e "/$f" ] && [ ! -d "/$f" ] && printf '%s\n' "$f"
+        done > "$STATE/replaced.list"
+        tar -tzf "$B/payload.tar.gz" 2>/dev/null | sed 's#^\./##' | grep -v '/$' | grep -v '^$' | while IFS= read -r f; do
+            [ ! -e "/$f" ] && printf '%s\n' "$f"
+        done > "$STATE/added.list"
+        tar -czf "$STATE/rollback.tar.gz" -C / -T "$STATE/replaced.list" 2>/dev/null || true
+        [ -s "$STATE/rollback.tar.gz" ] || tar -czf "$STATE/rollback.tar.gz" -T /dev/null
+    fi
+
+    printf '%s\n' "$CURRENT" > "$STATE/previous-version"
+    : > "$STATE/pending"
+    if ! tar -xzf "$B/payload.tar.gz" -C / --no-same-owner --keep-directory-symlink --no-overwrite-dir --warning=no-unknown-keyword 2>/dev/null; then
+        say "applying the payload failed"; cmd_rollback_now; die "the update was rolled back"
+    fi
+    if [ -x /usr/local/lib/ombra-update/post.sh ]; then
+        /usr/local/lib/ombra-update/post.sh "$CURRENT" "$ver" || { say "post step failed"; cmd_rollback_now; die "the update was rolled back"; }
+        rm -f /usr/local/lib/ombra-update/post.sh
+    fi
+    printf '%s\n' "$ver" > /etc/ombra/version
+    sed -i "s/^VERSION_ID=.*/VERSION_ID=$ver/" /usr/lib/os-release 2>/dev/null || true
+    rm -rf "$B"
+    sync
+    say "Updated to $ver. Restart to finish. A rollback stays available for ten minutes after the next boot."
+}
+
+cmd_rollback_now() {
+    if [ "$ROLE" = desktop ]; then
+        lvs "$VG/$SNAP" >/dev/null 2>&1 || { say "no rollback point"; return 1; }
+        lvconvert --merge "$VG/$SNAP" >/dev/null 2>&1 || return 1
+        say "rollback scheduled: restart now, and once more before you update again"
+    else
+        [ -f "$STATE/rollback.tar.gz" ] || { say "no rollback point"; return 1; }
+        tar -xzf "$STATE/rollback.tar.gz" -C / --warning=no-unknown-keyword 2>/dev/null || return 1
+        [ -f "$STATE/added.list" ] && while IFS= read -r f; do [ -n "$f" ] && rm -f "/$f"; done < "$STATE/added.list"
+        prev=$(cat "$STATE/previous-version" 2>/dev/null)
+        if valid_value "${prev:-}"; then
+            printf '%s\n' "$prev" > /etc/ombra/version
+            sed -i "s/^VERSION_ID=.*/VERSION_ID=$prev/" /usr/lib/os-release 2>/dev/null || true
+        fi
+        say "files restored: restart to finish"
+    fi
+    rm -f "$STATE/pending"
+}
+
+cmd_rollback() { need_root rollback; root_writable || die "restart in Persistent mode to roll back"; cmd_rollback_now; }
+
+cmd_commit() {
+    need_root commit
+    [ -e "$STATE/pending" ] || { say "nothing to commit"; return 0; }
+    if [ "$ROLE" = desktop ] && lvs "$VG/$SNAP" >/dev/null 2>&1; then
+        # a suspended-and-resumed VM can leave the snapshot half-removed: retry, then clear whatever is left
+        lvremove -fy "$VG/$SNAP" >/dev/null 2>&1 || { sleep 2; dmsetup resume "$VG-root" >/dev/null 2>&1; lvremove -fy "$VG/$SNAP" >/dev/null 2>&1; }
+        if lvs "$VG/$SNAP" >/dev/null 2>&1; then
+            say "the rollback point could not be removed yet; it will be tried again at the next start"
+            return 1
+        fi
+    fi
+    rm -f "$STATE/pending" "$STATE/rollback.tar.gz" "$STATE/replaced.list" "$STATE/added.list"
+    say "update committed"
+}
+
+case "${1:-}" in
+    check) cmd_check ;;
+    status) cmd_status ;;
+    apply) cmd_apply ;;
+    rollback) cmd_rollback ;;
+    commit) cmd_commit ;;
+    *) say "usage: ombra-update check|status|apply|rollback|commit"; exit 2 ;;
+esac

@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Ombra update notice
+Exec=/usr/local/bin/ombra-update-notify
+NoDisplay=true
+X-KDE-autostart-after=panel

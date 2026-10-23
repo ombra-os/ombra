@@ -1,0 +1,9 @@
+[Unit]
+Description=Shared folder with the Mac
+
+[Mount]
+What=/dev/disk/by-label/OMBRA-SHARE
+Where=/mnt/transfer/shared
+Type=vfat
+Options=uid=1000,gid=1000,umask=077,utf8,shortname=mixed,sync,flush,noexec,nosuid,nodev
+TimeoutSec=10

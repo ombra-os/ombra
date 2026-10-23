@@ -52,7 +52,12 @@ pub fn ring_size() -> (u16, u16) {
 pub const COMPACT_BELOW: u16 = 40;
 
 static PIXEL_MODE: AtomicBool = AtomicBool::new(false);
-static LOGO_RECT: [AtomicU16; 4] = [AtomicU16::new(0), AtomicU16::new(0), AtomicU16::new(0), AtomicU16::new(0)];
+static LOGO_RECT: [AtomicU16; 4] = [
+    AtomicU16::new(0),
+    AtomicU16::new(0),
+    AtomicU16::new(0),
+    AtomicU16::new(0),
+];
 /// Rows the emblem occupies when the framebuffer face is in charge.
 pub const PIXEL_RING_ROWS: u16 = 10;
 
@@ -62,7 +67,10 @@ pub fn set_pixel_mode(on: bool) {
 
 /// Where the pixel face last asked for the emblem, in cells.
 pub fn logo_rect() -> Option<Rect> {
-    let r: Vec<u16> = LOGO_RECT.iter().map(|v| v.load(Ordering::Relaxed)).collect();
+    let r: Vec<u16> = LOGO_RECT
+        .iter()
+        .map(|v| v.load(Ordering::Relaxed))
+        .collect();
     (r[2] > 0 && r[3] > 0).then(|| Rect::new(r[0], r[1], r[2], r[3]))
 }
 
@@ -112,7 +120,11 @@ pub fn render_for(area: Rect, buf: &mut Buffer, console_height: u16) {
         return;
     }
     let (full_w, _h) = ring_size();
-    let w = if console_height < COMPACT_BELOW { full_w.div_ceil(2) } else { full_w };
+    let w = if console_height < COMPACT_BELOW {
+        full_w.div_ceil(2)
+    } else {
+        full_w
+    };
     let x0 = area.x + area.width.saturating_sub(w) / 2;
     for (ry, line) in ring_rows(console_height).iter().enumerate() {
         let y = area.y + ry as u16;
@@ -155,7 +167,10 @@ impl Ring {
 impl Widget for Ring {
     fn render(self, area: Rect, buf: &mut Buffer) {
         if PIXEL_MODE.load(Ordering::Relaxed) {
-            for (slot, v) in LOGO_RECT.iter().zip([area.x, area.y, area.width, area.height]) {
+            for (slot, v) in LOGO_RECT
+                .iter()
+                .zip([area.x, area.y, area.width, area.height])
+            {
                 slot.store(v, Ordering::Relaxed);
             }
             return;
@@ -201,7 +216,9 @@ mod tests {
         let x0 = (80 - 22) / 2;
         let bright = (0..80u16)
             .flat_map(|x| (0..12u16).map(move |y| (x, y)))
-            .filter(|(x, y)| buf[(*x, *y)].symbol() == "@" && buf[(*x, *y)].fg == theme::RING_BRIGHT)
+            .filter(|(x, y)| {
+                buf[(*x, *y)].symbol() == "@" && buf[(*x, *y)].fg == theme::RING_BRIGHT
+            })
             .collect::<Vec<_>>();
         assert!(!bright.is_empty());
         assert!(bright.iter().all(|(x, _)| *x >= x0 && *x < x0 + 22));

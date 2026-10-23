@@ -1,0 +1,13 @@
+[Unit]
+Description=Forward the local SOCKS port to the gateway's Tor
+Requires=ombra-socks.socket
+After=ombra-socks.socket
+
+[Service]
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 10.55.10.1:9050
+DynamicUser=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_INET

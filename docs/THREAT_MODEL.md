@@ -59,6 +59,7 @@ everyone who gets the disk without the passphrase.
 | Component | Request | Cadence |
 |---|---|---|
 | `ombra-statusd` (desktop) | `https://check.torproject.org/api/ip` through the gateway SOCKS port, a ping to the gateway, an onion-name DNS query answered by the gateway | About every 30 s while a session is logged in |
+| `ombra-update check` (both) | Signed index `https://dl.ombra-os.org/updates/latest.txt` through Tor; the update itself downloads only when the user runs Update | A few minutes after boot, then daily |
 | `ombra-timesync` (both) | HTTPS `Date` header of `check.torproject.org`, `www.debian.org`, `archive.org` through Tor; clock steps only when two of three agree | Every 30 min |
 
 | Property | Value |
@@ -74,11 +75,12 @@ everyone who gets the disk without the passphrase.
 | Item | Value |
 |---|---|
 | Filter | `ombra-torctl` on the gateway, own unprivileged user, loopback-only egress |
-| Passed | `PROTOCOLINFO`, `AUTHENTICATE`, `QUIT` |
+| Passed | `PROTOCOLINFO` (answered locally with null authentication), `AUTHENTICATE`, `QUIT` |
 | `GETINFO` | `version`, `config-file`, `config-can-saveconf`, `status/bootstrap-phase`, `status/circuit-established`, `status/enough-dir-info`, `net/listeners/socks` |
-| `SETEVENTS` | `STATUS_CLIENT`, `STATUS_GENERAL`, `STATUS_SERVER`, `CONF_CHANGED`, `BW` |
-| Refused | Everything else: circuit and stream status, relay descriptors, `SIGNAL` |
-| Consequence | Tor Browser's circuit display and New Identity do not work |
+| `SETEVENTS` | `STATUS_CLIENT`, `STATUS_GENERAL`, `STATUS_SERVER`, `CONF_CHANGED`, `BW`, `HS_DESC`; `CIRC`, `STREAM` and `SIGNAL` are acknowledged locally and deliver nothing |
+| `ADD_ONION` / `DEL_ONION` | Allowed for OnionShare only: the target is rewritten to the desktop address, the virtual port range is 17600-17659, at most 8 services per control connection, and a service is removed with its connection. Gateway and desktop firewalls open only that range between the two machines |
+| Refused | Everything else: relay descriptors, `SETCONF`, `SIGNAL`, `HSFETCH`, arbitrary targets |
+| Consequence | Tor Browser's circuit display and New Identity do not work. A compromised desktop can publish onion services on those ports from its own machine; it cannot reach other gateway ports or change Tor |
 
 ## Not protected
 
@@ -91,6 +93,18 @@ everyone who gets the disk without the passphrase.
 | Seizure while running (A4, A7) | Keys and plaintext are in guest RAM and the host can image live state; at-rest protection applies only when the VMs are off |
 | Metadata | The ISP and Apple can see that this Mac runs Fusion and Tor; Fusion and macOS telemetry are outside our control |
 | User error | Pasting identifying data, reusing identities across Tor and clearnet, installing random software, backing up to a clearnet service |
+
+## Privacy applications
+
+| Application | Note |
+|---|---|
+| All | Preset to the gateway SOCKS port. The desktop firewall still rejects every destination except the gateway, so an application that ignores its proxy setting fails rather than leaks |
+| Wallets (Electrum, Feather) | In Amnesic mode the wallet file and seed vanish at shutdown. Back up the seed first; copy it somewhere you control before shutdown. Light wallets reveal addresses to the servers they query, over Tor |
+| OnionShare | The onion address is reachable by anyone who holds it. Share the address and key only over a channel you trust |
+| Kleopatra | Keys live in the home directory: encrypted at rest in Persistent mode, lost in Amnesic mode unless exported. Keyserver lookups go through Tor only |
+| SimpleX | The upstream arm64 desktop build is not signed. The image pins its sha256 but cannot verify an upstream signature. It reaches the network through a proxychains wrapper because the application has no SOCKS setting we can preset |
+| SimpleX conditions | SimpleX shows its conditions of use on first launch and the user accepts or declines them; Ombra does not pre-accept. Amnesic mode asks again each session |
+| Feather | Its bundled Tor is not used; the signed upstream archive is verified at build time |
 
 ## Boot modes
 
@@ -113,6 +127,7 @@ everyone who gets the disk without the passphrase.
 | Shared private link | The link is shared with the host adapter and any other VM attached to it; a co-resident VM can observe and reach both machines at layer 2. The no-egress guarantee comes from the single NIC and the gateway firewall |
 | Build-from-source exposure | The installer fetches Debian packages and does NTP over the host's NAT from the builder's real IP; release OVAs have no such step |
 | Host-guest channels | Clipboard, drag-and-drop and shared folders are off in the VM configuration and the desktop removes the guest plugins; display auto-fit stays on |
+| Application surface | Five more applications enlarge the guest's code and the image by about 1 GB; each is a separate attack surface inside the untrusted zone |
 | Sound and USB | The desktop VM has a virtual sound device and USB controller; microphone access follows the macOS permissions granted to Fusion |
 | Build pipeline | The build machine and its keys are a single point of compromise until independent verification exists |
 | Clock skew | The Tor-routed time consensus narrows the skew window but is itself visible to a global adversary as periodic probe traffic |
