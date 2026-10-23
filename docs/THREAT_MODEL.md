@@ -99,7 +99,7 @@ everyone who gets the disk without the passphrase.
 | Application | Note |
 |---|---|
 | All | Preset to the gateway SOCKS port. The desktop firewall still rejects every destination except the gateway, so an application that ignores its proxy setting fails rather than leaks |
-| Wallets (Electrum, Feather) | In Amnesic mode the wallet file and seed vanish at shutdown. Back up the seed first; copy it somewhere you control before shutdown. Light wallets reveal addresses to the servers they query, over Tor |
+| Wallets (Electrum, Feather) | In Amnesic mode the wallet file and seed vanish at shutdown. Write the seed down or copy it somewhere you control before shutdown. Light wallets reveal addresses to the servers they query, over Tor |
 | OnionShare | The onion address is reachable by anyone who holds it. Share the address and key only over a channel you trust |
 | Kleopatra | Keys live in the home directory: encrypted at rest in Persistent mode, lost in Amnesic mode unless exported. Keyserver lookups go through Tor only |
 | SimpleX | The upstream arm64 desktop build is not signed. The image pins its sha256 but cannot verify an upstream signature. It reaches the network through a proxychains wrapper because the application has no SOCKS setting we can preset |
