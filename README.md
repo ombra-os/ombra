@@ -137,3 +137,17 @@ Read the script first: [`scripts/build.sh`](scripts/build.sh). Manual route: [do
 ## License
 
 GPL-3.0-or-later. Copyright (C) 2026 Xen. See [LICENSE](LICENSE).
+
+## Support Ombra
+
+Ombra is free to use. Every release is free to download, build and run, with no account and no payment, and nothing in it depends on the token below.
+
+If you want to support the project and privacy tools like it, Ombra has a token on Solana. Trading it is an optional, voluntary way to support development.
+
+| | |
+|---|---|
+| Network | Solana |
+| Token page | [pump.fun/coin/GGHi5KXLsyBePcjyQsrPCKKJiXnV1rVNPwoXFKZBpump](https://pump.fun/coin/GGHi5KXLsyBePcjyQsrPCKKJiXnV1rVNPwoXFKZBpump) |
+| Contract address | `GGHi5KXLsyBePcjyQsrPCKKJiXnV1rVNPwoXFKZBpump` |
+
+The token is not an investment. It gives no claim on the project, its code or any revenue, its price can fall to zero, and nothing here is financial advice. Only use money you can afford to lose. Copy the contract address from this page, because look-alike tokens with similar names exist.
