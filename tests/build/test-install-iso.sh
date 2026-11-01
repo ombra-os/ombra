@@ -158,6 +158,8 @@ for f in ./usr/local/libexec/ombra/ombra-askpass ./usr/local/libexec/ombra/ombra
          ./etc/systemd/system/ombra-welcome.service \
          ./etc/systemd/system/ombra-askpass.service \
          ./etc/systemd/system/ombra-askpass-fallback.service \
+         ./etc/systemd/system/ombra-kwin-compositing.service \
+         ./usr/local/sbin/ombra-kwin-compositing \
          ./etc/systemd/system/sddm.service.d/10-ombra-firstuse.conf \
          ./usr/share/initramfs-tools/hooks/ombra-askpass \
          ; do
@@ -1369,6 +1371,34 @@ chk "dirmngr is Tor-only and the local SOCKS forwarder exists" \
 
 chk "SimpleX launches through the proxychains wrapper pointed at the gateway's Tor, and its launcher entry is replaced to use it" \
   "[ -x '$D2/usr/local/bin/simplex' ] && grep -q 'proxychains4 -q -f /etc/ombra/proxychains.conf /opt/simplex/bin/simplex' '$D2/usr/local/bin/simplex' && grep -qx 'socks5 10.55.10.1 9050' '$D2/etc/ombra/proxychains.conf' && grep -q 'Exec=/usr/local/bin/simplex' '$REPO/desktop/late-command.sh' && grep -q 'proxychains4 ' '$REPO/desktop/late-command.sh'"
+
+echo "== qemu guest tools (UTM) =="
+chk "both images install the QEMU guest agent, and the desktop installs spice-vdagent for display auto-fit" \
+  "grep -q ' qemu-guest-agent ' '$REPO/gateway/preseed.cfg' && grep -q ' qemu-guest-agent spice-vdagent ' '$REPO/desktop/preseed.cfg'"
+chk "both overlays ship the same agent allowlist: ping, sync, sync-delimited and info, nothing that runs commands, touches files or sets state" \
+  "cmp -s '$REPO/gateway/rootfs/etc/qemu/qemu-ga.conf' '$REPO/desktop/rootfs/etc/qemu/qemu-ga.conf' && grep -qx 'allow-rpcs=guest-sync,guest-sync-delimited,guest-ping,guest-info' '$REPO/desktop/rootfs/etc/qemu/qemu-ga.conf' && ! grep -q -E '^[^#]*(block-rpcs|guest-exec|guest-file|guest-set-|guest-ssh|guest-fs|guest-shutdown)' '$REPO/desktop/rootfs/etc/qemu/qemu-ga.conf'"
+# the compositor policy: run the real script with a stubbed systemd-detect-virt against a scratch config path
+KW="$TMP/kwin-policy"; mkdir -p "$KW/bin"
+sed "s#/etc/xdg/kwinrc#$KW/kwinrc#" "$REPO/desktop/rootfs/usr/local/sbin/ombra-kwin-compositing" > "$KW/run.sh"
+for v in qemu vmware none; do printf '#!/bin/sh\necho %s\n' "$v" > "$KW/bin/systemd-detect-virt-$v"; done
+kw_run() { printf '#!/bin/sh\necho %s\n' "$1" > "$KW/bin/systemd-detect-virt"; chmod +x "$KW/bin/systemd-detect-virt"; PATH="$KW/bin:$PATH" sh "$KW/run.sh"; }
+chk "KWin compositing is switched off on a QEMU guest (software GL stalls on screen growth)" \
+  "kw_run qemu && grep -qx 'Enabled=false' '$KW/kwinrc' && grep -qx '\\[Compositing\\]' '$KW/kwinrc'"
+chk "KWin compositing is left as shipped on VMware, and a stale QEMU policy is removed there" \
+  "kw_run vmware && [ ! -e '$KW/kwinrc' ]"
+chk "the compositing policy unit runs before the display manager, is enabled by late-command and its helper is made executable" \
+  "grep -q '^Before=sddm.service' '$REPO/desktop/rootfs/etc/systemd/system/ombra-kwin-compositing.service' && grep -q 'systemctl enable ombra-kwin-compositing.service' '$REPO/desktop/late-command.sh' && grep -q 'sbin/ombra-kwin-compositing' '$REPO/desktop/late-command.sh' && [ -x '$REPO/desktop/rootfs/usr/local/sbin/ombra-kwin-compositing' ]"
+chk "both late-command scripts check every allowed command against the agent and refuse command execution, file access or state changes" \
+  "for f in gateway desktop; do grep -q 'qemu-ga --allow-rpcs=help' '$REPO'/\$f/late-command.sh && grep -q 'allows command execution, file access or a state change' '$REPO'/\$f/late-command.sh && grep -q 'which this agent does not have' '$REPO'/\$f/late-command.sh || exit 1; done"
+chk "the allowlist check captures the agent's help through chroot, never through in-target (in-target sends its output to the syslog, so a capture of it is always empty and parks the install)" \
+  "for f in gateway desktop; do grep -q 'GA_KNOWN=\"\$(chroot /target qemu-ga --allow-rpcs=help' '$REPO'/\$f/late-command.sh && ! grep -q '\$(in-target qemu-ga' '$REPO'/\$f/late-command.sh && grep -q 'printed nothing' '$REPO'/\$f/late-command.sh || exit 1; done"
+chk "the desktop initrd carries the virtio_gpu driver (hook ships executable) and the build refuses to ship without it, so the unlock screen is visible under QEMU/UTM" \
+  "[ -x '$REPO/desktop/rootfs/usr/share/initramfs-tools/hooks/ombra-gpu' ] && grep -qx 'manual_add_modules virtio_gpu' '$REPO/desktop/rootfs/usr/share/initramfs-tools/hooks/ombra-gpu' && grep -q 'virtio\[-_\]gpu\[.\]ko' '$REPO/desktop/late-command.sh' && grep -q 'the rebuilt initrd has no virtio_gpu driver' '$REPO/desktop/late-command.sh'"
+chk "only TEST builds get the wider agent allowlist and the test-build marker; the release path removes the empty override" \
+  "grep -q 'if \\[ -n \"\$TEST_PASS\" \\]; then' '$REPO/build/make-install-iso.sh' && grep -q ': > \"\$STAGE/initrd/ombra/test-build\"' '$REPO/build/make-install-iso.sh' && grep -q 'guest-exec,guest-exec-status' '$REPO/build/make-install-iso.sh'"
+
+chk "the release ISOs carry the strict agent allowlist and no test-build marker" \
+  "! grep -rq 'guest-exec' '$G2/etc/qemu' '$T2/etc/qemu' && [ ! -e '$TMP/x-gateway/ombra/test-build' ] && [ ! -e '$TMP/x-desktop/ombra/test-build' ] && grep -qx 'allow-rpcs=guest-sync,guest-sync-delimited,guest-ping,guest-info' '$G2/etc/qemu/qemu-ga.conf' '$T2/etc/qemu/qemu-ga.conf'"
 
 echo "== boot ordering =="
 chk "accounts-daemon is ordered after logind so its sandbox finds /run/systemd/seats" \

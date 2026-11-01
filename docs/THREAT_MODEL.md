@@ -31,13 +31,13 @@ correctly.
 
 ## Trust boundary
 
-The boundary is the VMware Fusion hypervisor.
+The boundary is the hypervisor: VMware Fusion, or UTM (QEMU 10 on Apple's Hypervisor framework) for the UTM archives.
 
 | Zone | Contents | Trust |
 |---|---|---|
 | Untrusted | Desktop userland at runtime: apps, files, downloaded content | None |
 | Ours | Desktop and gateway guest OS, pinned at build | Integrity rests on the build pipeline |
-| Trusted computing base | Apple silicon, firmware and SEP; macOS; Fusion; the Ombra build chain | Full |
+| Trusted computing base | Apple silicon, firmware and SEP; macOS; Fusion or UTM, whichever runs the VMs; the Ombra build chain | Full |
 | Semi-trusted | Debian, Tor and Fusion packages | Independently verifiable signatures |
 
 Ombra cannot defend the guest against the host. It defends the guest's
@@ -90,8 +90,9 @@ everyone who gets the disk without the passphrase.
 | Hardware and physical attacks (A7) | Evil-maid on the Mac or firmware, implants, bus attacks and coercion are out of scope; no host secure-boot story |
 | Tor-level adversaries (A6) | Entry and exit traffic confirmation, malicious exits seeing plaintext protocols, guard compromise and browser fingerprinting remain Tor's and the browser's problems; no fingerprinting claims |
 | Fusion compromise or escape | A hypervisor 0-day or trojaned Fusion defeats everything; mitigation is verified downloads and pinned versions |
+| UTM or QEMU compromise or escape | Same outcome as a Fusion escape. UTM runs QEMU, a large C code base that emulates the guest's devices (virtio, NVMe, vmxnet3, e1000e, USB) in a user process, and the bundles run QEMU's own interrupt controller (`-machine kernel-irqchip=off`) instead of the hypervisor's, which adds a little more emulation. The images keep those device models for guest compatibility, so a QEMU device bug is in scope of the trust you place in UTM. Mitigations are the same: a verified UTM download, a current version, and no host-guest channels (the bundle config is checked for every one of them) |
 | Seizure while running (A4, A7) | Keys and plaintext are in guest RAM and the host can image live state; at-rest protection applies only when the VMs are off |
-| Metadata | The ISP and Apple can see that this Mac runs Fusion and Tor; Fusion and macOS telemetry are outside our control |
+| Metadata | The ISP and Apple can see that this Mac runs Fusion or UTM and Tor; Fusion, UTM and macOS telemetry are outside our control |
 | User error | Pasting identifying data, reusing identities across Tor and clearnet, installing random software, backing up to a clearnet service |
 
 ## Privacy applications
@@ -124,11 +125,12 @@ everyone who gets the disk without the passphrase.
 |---|---|
 | First-use window | Until first boot completes, the disk opens with the public build passphrase. A copy of the image from before first boot holds the original volume key, which protects only the empty disk. A power cut during re-encryption is recoverable but leaves the machine unusable until the Resume screen finishes the job |
 | Guard sample per boot | Amnesic gateway mode trades Tor's persistent-guard protection for a stateless gateway; Persistent mode keeps the guards |
-| Shared private link | The link is shared with the host adapter and any other VM attached to it; a co-resident VM can observe and reach both machines at layer 2. The no-egress guarantee comes from the single NIC and the gateway firewall |
+| Shared private link | The link is shared with the host adapter and any other VM attached to it; a co-resident VM can observe and reach both machines at layer 2. The Mac itself has an address on the link (10.55.20.100 under UTM), so a guest whose root account is compromised could reach any service the Mac listens on across all interfaces: keep the macOS firewall on and file sharing off. The no-egress guarantee comes from the single NIC and the gateway firewall |
+| Fixed MAC addresses under UTM | A UTM bundle carries its network cards' MAC addresses and UTM keeps them on import, so every UTM user has the same MACs on the private link. They exist only between the two VMs and the Mac; the gateway's NAT hides its MAC from the home network. Importing the same archive twice on one Mac puts two VMs with the same MACs on the link, which breaks both until one is deleted or its MAC is changed in UTM |
 | Build-from-source exposure | The installer fetches Debian packages and does NTP over the host's NAT from the builder's real IP; release OVAs have no such step |
-| Host-guest channels | Clipboard, drag-and-drop and shared folders are off in the VM configuration and the desktop removes the guest plugins; display auto-fit stays on |
+| Host-guest channels | Clipboard, drag-and-drop and shared folders are off in the VM configuration and the desktop removes the guest plugins; display auto-fit stays on. Under UTM the clipboard setting is enforced by UTM on the Mac, not inside the guest (`spice-vdagent` has no switch to disable it), so a user who turns clipboard sharing on in UTM opens that channel. UTM's display socket has no password; it sits in UTM's own data folder, which macOS protects from other apps, so reaching it takes access to that folder |
 | Application surface | Five more applications enlarge the guest's code and the image by about 1 GB; each is a separate attack surface inside the untrusted zone |
-| Sound and USB | The desktop VM has a virtual sound device and USB controller; microphone access follows the macOS permissions granted to Fusion |
+| Sound and USB | The desktop VM has a virtual sound device and USB controller; microphone access follows the macOS permissions granted to Fusion. Under UTM there is no sound device; the USB controller carries only keyboard and pointer, with USB sharing off (UTM adds three idle usb-redir channels that carry nothing unless a device is attached through UTM) |
 | Build pipeline | The build machine and its keys are a single point of compromise until independent verification exists |
 | Clock skew | The Tor-routed time consensus narrows the skew window but is itself visible to a global adversary as periodic probe traffic |
 | Unencrypted gateway disk | It holds no user data; an attacker with it learns the shipped image and, in Persistent mode, Tor's state |

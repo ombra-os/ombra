@@ -122,7 +122,7 @@ bash "$HERE/verify-bundle.sh" "$ARCHIVE" || fatal "the archive failed verificati
 
 cd "$OUT_DIR"
 : > SHA256SUMS.txt.new
-for f in ombra-*.vmwarevm.zip; do
+for f in ombra-*.vmwarevm.zip ombra-*.utm.zip; do
   [ -f "$f" ] || continue
   printf '%12s bytes  %s\n' "$(stat -f %z "$f")" "$f"
   shasum -a 256 "$f" >> SHA256SUMS.txt.new

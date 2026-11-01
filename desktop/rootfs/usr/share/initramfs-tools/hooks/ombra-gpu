@@ -1,0 +1,18 @@
+#!/bin/sh
+# ombra-gpu initramfs hook — the disk-unlock screen draws into /dev/fb0 from the initramfs, before the root
+# disk is open. Under QEMU/UTM the GPU is virtio-gpu, whose screen stays blank ("Display output is not
+# active") until the virtio_gpu driver is loaded, and MODULES=most does not carry it. VMware Fusion needs no
+# driver here: its firmware framebuffer is live. The module is harmless where no virtio GPU exists.
+PREREQ=""
+
+prereqs() {
+    echo "$PREREQ"
+}
+
+case "$1" in
+    prereqs) prereqs; exit 0 ;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+manual_add_modules virtio_gpu

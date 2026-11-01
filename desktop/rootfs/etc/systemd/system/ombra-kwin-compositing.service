@@ -1,0 +1,25 @@
+[Unit]
+Description=Ombra KWin compositing policy (off on QEMU guests, which have no GPU)
+After=local-fs.target
+Before=sddm.service display-manager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/ombra-kwin-compositing
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/xdg
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=graphical.target

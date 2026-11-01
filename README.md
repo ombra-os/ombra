@@ -49,13 +49,13 @@
 
 ## Install
 
-1. Download both OVAs and `SHA256SUMS.txt` from [ombra-os.org/downloads](https://ombra-os.org/downloads)
+1. Download both VM archives (VMware Fusion `.vmwarevm.zip`, or UTM `.utm.zip`) and `SHA256SUMS.txt` from [ombra-os.org/install](https://ombra-os.org/install)
 2. Verify:
 
    ```sh
    shasum -a 256 -c SHA256SUMS.txt --ignore-missing
    ```
-3. Import both OVAs into VMware Fusion
+3. Unzip both archives and open them in VMware Fusion or UTM
 4. Power on the gateway, then the desktop; choose **Persistent** on the desktop for first boot
 5. Set your disk passphrase and password; the disk re-encrypts under a new key
 
@@ -63,9 +63,9 @@ Details: [docs/INSTALL.md](docs/INSTALL.md)
 
 | Requirement | Value |
 |---|---|
-| Host | Apple Silicon Mac, VMware Fusion |
-| Download | 5.9 GB |
-| Free disk | 40 GB recommended (5 GB gateway + 30 GB desktop, provisioned) |
+| Host | Apple Silicon Mac with VMware Fusion or UTM 5.0.8+ |
+| Download | About 7.3 GB (both machines) |
+| Free disk | About 45 GB (5 GB gateway + 30 GB desktop, provisioned, plus the archives) |
 
 ## The two machines
 
@@ -95,14 +95,14 @@ Details: [docs/INSTALL.md](docs/INSTALL.md)
 | **Apple Silicon** | **Yes, native arm64** | Partial. Not officially supported | No. x86-64 only |
 | **Amnesic mode** | **Your choice at every boot** | Partial. Optional (live mode) | Yes. Always |
 | **Disk encryption** | **LUKS2 on the desktop disk, inside the VM** | No. Not in its images; encrypt the host | Partial. Optional encrypted Persistent Storage |
-| **Runs on** | **VMware Fusion** | VirtualBox, KVM, Qubes | Bare hardware |
+| **Runs on** | **VMware Fusion or UTM** | VirtualBox, KVM, Qubes | Bare hardware |
 | **Maturity** | **New, no independent audit** | Established | Established |
 
 Modern means built for Apple Silicon and Debian 13 from the start; it also means new, with no independent audit yet.
 
 ## Status
 
-- Apple Silicon and VMware Fusion only; there is no x86 build
+- Apple Silicon with VMware Fusion or UTM only; there is no x86 build
 - Only the latest release is supported; earlier releases get no fixes and their images are not kept
 - Tor Browser is the alpha channel (16.0a14): the only channel with linux-aarch64 builds
 - No independent security audit yet; read the [threat model](docs/THREAT_MODEL.md) before relying on it

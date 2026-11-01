@@ -111,7 +111,7 @@ tar -xzf /ombra/rootfs.tar.gz -C /target
 # git cannot carry these modes; NetworkManager ignores a profile that is not 0600
 chmod 0600 /target/etc/NetworkManager/system-connections/*.nmconnection \
     || ombra_fatal "NetworkManager profile mode not set — the intnet link would never come up"
-chmod 0755 /target/usr/local/sbin/ombra-askpass-fallback /target/usr/local/sbin/ombra-timesync \
+chmod 0755 /target/usr/local/sbin/ombra-askpass-fallback /target/usr/local/sbin/ombra-timesync /target/usr/local/sbin/ombra-kwin-compositing \
     || ombra_fatal "overlay sbin helpers not executable on the target"
 
 # no ssh on the desktop: build/test access is vmrun guest operations
@@ -154,12 +154,34 @@ if [ -n "$(in-target find /usr/lib -path '*open-vm-tools/plugins/*' \( -name lib
     ombra_fatal "open-vm-tools clipboard/dnd/hgfs plugins still present — host-guest channel would stay open"
 fi
 
+# QEMU/UTM guest half of host-guest isolation: the agent may only answer the allowlist shipped in qemu-ga.conf, and every name on it must be a command this agent really has
+GA_CONF=/target/etc/qemu/qemu-ga.conf
+[ -x /target/usr/sbin/qemu-ga ] || ombra_fatal "qemu-guest-agent is not installed"
+grep -q '^allow-rpcs=' "$GA_CONF" || ombra_fatal "qemu-ga.conf has no allow-rpcs line — the agent would answer every command"
+# a TEST build (never exported) adds a marker and a wider allowlist so the host can inspect the guest, the way vmrun does for Fusion
+if [ ! -e /ombra/test-build ]; then
+    ! grep -q -E '^(block-rpcs|allow-rpcs)=.*(guest-exec|guest-file|guest-set-|guest-ssh|guest-fs)' "$GA_CONF" \
+        || ombra_fatal "qemu-ga.conf allows command execution, file access or a state change"
+fi
+# chroot, not in-target: in-target sends its output to the syslog, so a command substitution around it would capture nothing
+GA_KNOWN="$(chroot /target qemu-ga --allow-rpcs=help 2>&1 | tr ' ,\t' '\n\n\n')"
+[ -n "$GA_KNOWN" ] || ombra_fatal "qemu-ga --allow-rpcs=help printed nothing — the allowlist cannot be checked"
+for rpc in $(sed -n 's/^allow-rpcs=//p' "$GA_CONF" | tr ',' ' '); do
+    printf '%s\n' "$GA_KNOWN" | grep -qFx "$rpc" \
+        || ombra_fatal "qemu-ga.conf allows '$rpc', which this agent does not have"
+done
+[ -x /target/usr/bin/spice-vdagent ] && [ -x /target/usr/sbin/spice-vdagentd ] \
+    || ombra_fatal "spice-vdagent is not installed — the QEMU display would not follow the window size"
+
 # --- fixed machine-id: one anonymity set shared by every install
 printf '6f6d6272610000000000000000000001\n' > /target/etc/machine-id
 ln -sf /etc/machine-id /target/var/lib/dbus/machine-id
 
 # Tor-only time sync through the gateway (units ship in the overlay)
 in-target systemctl enable ombra-timesync.timer >/dev/null 2>&1 || true
+# KWin compositor policy: off on QEMU guests only (a unit, because the image cannot know which hypervisor it will boot under)
+in-target systemctl enable ombra-kwin-compositing.service >/dev/null 2>&1 \
+    || ombra_fatal "systemctl enable failed for ombra-kwin-compositing"
 chmod 0755 /target/usr/local/sbin/ombra-update /target/usr/local/bin/ombra-update-notify /target/usr/local/bin/ombra-update-gui
 in-target systemctl enable ombra-update-check.timer ombra-update-commit.timer >/dev/null 2>&1 || true
 # the desktop's own default-drop firewall (ruleset ships in the overlay)
@@ -529,6 +551,10 @@ if ! in-target sh -c 'lsinitramfs /boot/initrd.img-* 2>/dev/null | grep -q "usr/
 fi
 if ! in-target sh -c 'lsinitramfs /boot/initrd.img-* 2>/dev/null | grep -q "init-bottom/overlayroot"'; then
     ombra_fatal "the rebuilt initrd has no overlayroot script — the Amnesic boot mode would silently persist"
+fi
+# the unlock screen needs the virtio GPU driver in the initrd, or a QEMU/UTM machine shows "Display output is not active" at every unlock
+if ! in-target sh -c 'lsinitramfs /boot/initrd.img-* 2>/dev/null | grep -q -E "virtio[-_]gpu[.]ko"'; then
+    ombra_fatal "the rebuilt initrd has no virtio_gpu driver — the disk-unlock screen would be blank under QEMU/UTM"
 fi
 grep -qx 'overlayroot=""' /target/etc/overlayroot.conf \
     || ombra_fatal "overlayroot.conf is not persistent by default — the desktop would boot amnesic without being asked"

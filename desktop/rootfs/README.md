@@ -58,6 +58,7 @@ is the only network manager on the desktop).
 | Path | What it is |
 |------|------------|
 | `etc/skel/.config/kdedefaults/` | KConfig defaults layer: Colloid-dark look-and-feel, Kvantum-dark style, ColloidDark colors, Kaze-dark icons, phinger cursors, Noto Sans and JetBrains Mono Nerd Font, kitty, translucency block in `kwinrc`; the look-and-feel id must match in both files |
+| `etc/systemd/system/ombra-kwin-compositing.service`, `usr/local/sbin/ombra-kwin-compositing` | Writes `/etc/xdg/kwinrc` with `[Compositing] Enabled=false` on a QEMU guest (UTM) and removes it elsewhere; software-rendered GL compositing stalls on a screen resize |
 | `etc/skel/.config/plasma-*` (absent) | The layout is generated at first login from the look-and-feel `contents/layouts/org.kde.plasma.desktop-layout.js`; that filename is what the loader asks for, and its launchers value must be a JS array |
 | `etc/skel/.config/baloofilerc` | Baloo file indexer off |
 | `etc/skel/.config/kscreenlockerrc` | 10-minute idle lock, lock on resume, lock-screen wallpaper pinned to `ombra-02-4k` |

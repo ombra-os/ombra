@@ -1,0 +1,21 @@
+#!/bin/sh
+#
+# ombra-kwin-compositing — on a QEMU guest (UTM) turn KWin's compositor off; elsewhere leave it as shipped.
+# Without a GPU, KWin's OpenGL compositor runs on Mesa's software renderer (llvmpipe) through GLX, and on
+# X11 that stalls for 20 seconds or forever when the screen grows (the desktop stays at its old size after a window
+# resize). Measured in a UTM guest: growth repaints in about 2 s with the compositor off, 6 of 6 trials, against
+# no repaint at all in 3 of 3 with it on. Window shadows, translucency and animations go with it.
+# Written as the system-wide KConfig layer /etc/xdg/kwinrc, so a user's own kwinrc still wins.
+
+set -eu
+
+CONF=/etc/xdg/kwinrc
+
+if [ "$(systemd-detect-virt --vm 2>/dev/null || true)" = qemu ]; then
+    tmp="$CONF.new"
+    printf '# written by ombra-kwin-compositing: QEMU guest, no GPU, see that script\n[Compositing]\nEnabled=false\n' > "$tmp"
+    chmod 0644 "$tmp"
+    mv -f "$tmp" "$CONF"
+else
+    rm -f "$CONF"
+fi

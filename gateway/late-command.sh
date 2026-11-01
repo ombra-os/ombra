@@ -138,6 +138,23 @@ in-target systemctl disable systemd-timesyncd.service apt-daily.timer apt-daily-
 # wait-online costs 3.7s/boot and wedges boot with no carrier; nothing needs it
 in-target systemctl mask systemd-networkd-wait-online.service
 
+# QEMU/UTM guest half of host-guest isolation: the agent may only answer the allowlist shipped in qemu-ga.conf, and every name on it must be a command this agent really has
+GA_CONF=/target/etc/qemu/qemu-ga.conf
+[ -x /target/usr/sbin/qemu-ga ] || ombra_fatal "qemu-guest-agent is not installed"
+grep -q '^allow-rpcs=' "$GA_CONF" || ombra_fatal "qemu-ga.conf has no allow-rpcs line — the agent would answer every command"
+# a TEST build (never exported) adds a marker and a wider allowlist so the host can inspect the guest, the way vmrun does for Fusion
+if [ ! -e /ombra/test-build ]; then
+    ! grep -q -E '^(block-rpcs|allow-rpcs)=.*(guest-exec|guest-file|guest-set-|guest-ssh|guest-fs)' "$GA_CONF" \
+        || ombra_fatal "qemu-ga.conf allows command execution, file access or a state change"
+fi
+# chroot, not in-target: in-target sends its output to the syslog, so a command substitution around it would capture nothing
+GA_KNOWN="$(chroot /target qemu-ga --allow-rpcs=help 2>&1 | tr ' ,\t' '\n\n\n')"
+[ -n "$GA_KNOWN" ] || ombra_fatal "qemu-ga --allow-rpcs=help printed nothing — the allowlist cannot be checked"
+for rpc in $(sed -n 's/^allow-rpcs=//p' "$GA_CONF" | tr ',' ' '); do
+    printf '%s\n' "$GA_KNOWN" | grep -qFx "$rpc" \
+        || ombra_fatal "qemu-ga.conf allows '$rpc', which this agent does not have"
+done
+
 # the machine ships UTC (no timezone fingerprint); runtime time is
 # owned by ombra-timesync over Tor
 ln -sf /usr/share/zoneinfo/UTC /target/etc/localtime

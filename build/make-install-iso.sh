@@ -54,6 +54,15 @@ if [ -n "$TEST_PASS" ]; then
     "$STAGE/initrd/preseed.cfg" > "$STAGE/initrd/preseed.cfg.new" && mv "$STAGE/initrd/preseed.cfg.new" "$STAGE/initrd/preseed.cfg"
 fi
 
+# TEST builds also let the QEMU guest agent run commands and read files, so the host can drive the guest under UTM like vmrun does under Fusion
+mkdir -p "$STAGE/extra/etc/qemu"
+if [ -n "$TEST_PASS" ]; then
+  : > "$STAGE/initrd/ombra/test-build"
+  printf '[general]\nallow-rpcs=guest-sync,guest-sync-delimited,guest-ping,guest-info,guest-exec,guest-exec-status,guest-file-open,guest-file-close,guest-file-read,guest-file-write\n' > "$STAGE/extra/etc/qemu/qemu-ga.conf"
+else
+  rmdir "$STAGE/extra/etc/qemu" "$STAGE/extra/etc" 2>/dev/null || true
+fi
+
 # LINT: every preseed line must be <owner> <template> <type> <value>;
 while IFS= read -r line; do
   case "$line" in ""|"#"*|" "*|"	"*) continue ;; esac

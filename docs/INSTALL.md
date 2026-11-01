@@ -18,7 +18,7 @@ after the installer ISOs; `--yes` answers every prompt.
 
 ## Quick start: requirements
 
-- Apple Silicon Mac, VMware Fusion
+- Apple Silicon Mac with VMware Fusion, or with UTM 5.0.8 or newer
 - About 45 GB of free disk. The downloads are about 7 GB (desktop) and
   0.7 GB (gateway), and you need room for the archive and the unzipped
   copy until you delete the archive. The provisioned virtual disks are
@@ -64,6 +64,32 @@ choice; nothing starts on its own.
 
 Pick **Persistent** for the desktop's first boot. You can restart into
 either mode at any time.
+
+## Quick start: UTM
+
+The same two machines run under UTM instead of VMware Fusion. Pick one
+hypervisor and use its archives; do not mix them.
+
+| Step | Detail |
+|---|---|
+| Host | Apple Silicon Mac, UTM 5.0.8 or newer (QEMU backend; Ombra does not use the Apple Virtualization backend) |
+| Download | `ombra-gateway-arm64-v1.1.0.utm.zip`, `ombra-desktop-arm64-v1.1.0.utm.zip` and `SHA256SUMS.txt`; verify with `shasum -a 256 -c SHA256SUMS.txt --ignore-missing` |
+| Unpack | Double-click each zip in Finder, or run `ditto -x -k <zip> .` in a terminal |
+| Import | Double-click each `.utm` to add it to UTM. Nothing needs changing in the VM settings |
+| Start | Gateway first: pick a boot mode, wait for its health report. Then the desktop: pick **Persistent** for the first boot. First boot is identical to Fusion (see below) |
+
+What differs from Fusion:
+
+| Topic | UTM |
+|---|---|
+| Display | The desktop follows the UTM window size. Leave Retina mode off. The display card is `virtio-gpu-pci` on purpose: typing was slower with the GL-accelerated cards in testing, and they hand the guest access to the Mac's graphics stack |
+| Private link | Both VMs sit on UTM's host-only network (10.55.20.0/24); the guests use static 10.55.10.x addresses on top of it, so the Mac has no address on their subnet. The gateway's upstream is UTM's Shared Network (NAT) |
+| Restart | A restart from inside the guest hangs on UTM 5.0.8 unless QEMU runs the interrupt controller itself, so the bundles carry the argument `-machine kernel-irqchip=off`. Do not remove it. The price is about 15% of one Mac core while the VM is idle |
+| Window size | The desktop follows the UTM window when you resize it. To make that reliable, the desktop turns KWin's compositor off when it runs under QEMU (UTM), so there are no window shadows, translucency or animations there. VMware Fusion keeps them |
+| Host channels | Clipboard sharing, shared folders, USB sharing and serial ports are off in the shipped configuration. Leave them off: turning clipboard sharing on lets the Mac read and write the guest clipboard |
+| Guest tools | `qemu-guest-agent` answers only ping, sync and info; `spice-vdagent` drives window-size changes. The VMware tools stay installed and idle |
+| Not available | The Mac Shared Folder transfer disk is a Fusion feature and is not supported under UTM |
+| Updates | The in-place updater works the same way; it needs Persistent mode |
 
 ## Requirements (building from source)
 
@@ -265,3 +291,22 @@ zips it, runs `verify-bundle.sh` on the archive and writes one
 with `--ignore-missing`. Output lands in `build/releases/`. The older
 `export-release-image.sh` OVA path is kept for reference only: OVF cannot
 express an ARM guest type.
+
+## Export the UTM images (maintainers)
+
+A UTM archive is made from a freshly installed Fusion-built VM: the same disk,
+converted to qcow2, in a different hypervisor wrapper. The v1.1.0 UTM archives
+were built after the Fusion ones and add the QEMU guest tools; the published
+Fusion archives are unchanged. Both VMs must be powered off and post-installed,
+and the desktop must never have been booted.
+Needs `qemu-img` (`brew install qemu`) and UTM.app.
+
+```sh
+bash build/utm/export-bundle.sh gateway
+bash build/utm/export-bundle.sh desktop
+```
+
+The script converts the disk to qcow2, writes `config.plist` with every
+host-guest channel off, zips the bundle and runs `build/utm/verify-bundle.sh`
+on the archive. A TEST build is refused unless you pass `--allow-test`, which
+writes an unzipped `ombra-<target>-TEST.utm` for local end-to-end testing only.

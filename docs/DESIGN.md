@@ -17,6 +17,18 @@ Architecture and invariants. Component detail lives beside the components
 | Extra NICs | none, ever | none, ever |
 | USB | off | console input only |
 
+### Under UTM
+
+| Item | UTM (QEMU, `hvf`) |
+|---|---|
+| Machine | `virt`, UEFI; the Fusion-built disk converted to qcow2 |
+| Disk, NICs | NVMe, `vmxnet3` and `e1000e`: the same device names the guest code matches, so one image serves both hypervisors |
+| Interrupt controller | In QEMU (`-machine kernel-irqchip=off`). With the hypervisor's own GIC, UTM 5.0.8 (QEMU 10.0.12) leaves it unreset on a guest restart and the next boot hangs before the kernel prints anything; found by testing, 3 of 3 failures without the flag and none with it. Idle CPU rises from about 5% to about 19% of a core; typing latency stays near 40 ms |
+| Compositor | Off on QEMU guests (`ombra-kwin-compositing` writes `/etc/xdg/kwinrc`, `[Compositing] Enabled=false`). With no GPU, KWin's OpenGL compositor runs on Mesa's software renderer through GLX, and when the screen grows it stalls for about 19 s or never repaints. With it off, growth repaints in about 2 s (6 of 6 trials, against 0 of 3), typing latency median about 39 ms. Blur off, EGL instead of GLX and llvmpipe thread counts did not cure it. VMware keeps the compositor |
+| Display | `virtio-gpu-pci`, no GL. The initrd carries `virtio_gpu` so the unlock screen draws before the root disk opens |
+| Private link | UTM host-only network 10.55.20.0/24; guests keep static 10.55.10.x; gateway upstream on UTM Shared (NAT) |
+| Host channels | Clipboard, shared folder, USB sharing, serial and sound off in the bundle; `qemu-guest-agent` allowlist is ping, sync, info; `spice-vdagent` only follows the window size |
+
 The desktop has no network path except through the gateway. That
 topology plus the gateway firewall is the product.
 
@@ -123,7 +135,7 @@ disarmed). The menu waits for a choice.
 | Session | KDE Plasma on X11 only; the Wayland entry is diverted at install. X11 is required for open-vm-tools display auto-fit |
 | Privacy floor | No telemetry, Baloo off, no Discover, no KDE Connect, no networked widgets, clipboard history off |
 | Status LED | `org.ombra.status` shows the Tor verdict from the status daemon; never network content |
-| Host channels | vmx keys disable copy/paste, drag-and-drop and shared folders; the guest also removes the drag-and-drop and hgfs plugins; display auto-fit stays |
+| Host channels | Fusion: vmx keys disable copy/paste, drag-and-drop and shared folders; the guest also removes the drag-and-drop and hgfs plugins; display auto-fit stays. UTM: the bundle turns clipboard sharing, shared folders and USB sharing off, and the QEMU agent answers a short allowlist (see Under UTM) |
 | Transfer disk | When a shared-folder disk is attached to the desktop VM it appears as one extra disk, labelled `OMBRA-SHARE`, and no network. A fixed systemd mount puts it at `/mnt/transfer/shared` (`vfat`, `sync,flush`, `noexec,nosuid,nodev`); the `udf` driver stays blacklisted. Dolphin's sidebar lists one place, Mac Shared Folder, the raw device is hidden from udisks, and a right-click Copy to Mac Shared Folder works from anywhere |
 | Browser | Tor Browser (alpha channel, the only one with linux-aarch64 builds) wrapped to use the gateway's SOCKS port; updater disabled |
 | Privacy applications | Kleopatra (OpenPGP, keyserver traffic only through Tor), OnionShare, Electrum, Feather and SimpleX; each is pinned or from the frozen Debian suite and is pointed at the gateway SOCKS port by shipped presets. Feather and SimpleX are vendored at a pinned hash and never fetch or update themselves. Tor services bundled by an application are disabled: the desktop has no tor daemon, and `ombra-socks` forwards the loopback SOCKS port that applications expect to the gateway |
