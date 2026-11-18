@@ -142,9 +142,9 @@ update-initramfs -u -k all >/dev/null 2>&1 || restore
 for i in /boot/initrd.img-*; do
     l=$(lsinitramfs "$i") || restore
     for p in scripts/local-top/cryptroot usr/local/libexec/ombra/ombra-askpass; do
-        printf '%s\n' "$l" | grep -q "$p" || restore
+        case "$l" in *"$p"*) ;; *) restore ;; esac
     done
-    printf '%s\n' "$l" | grep -qE 'virtio[-_]gpu[.]ko' || restore
+    case "$l" in *virtio-gpu.ko*|*virtio_gpu.ko*) ;; *) restore ;; esac
 done
 update-grub >/dev/null 2>&1 || restore
 G=/boot/grub/grub.cfg
