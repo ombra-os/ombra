@@ -177,7 +177,7 @@ disarmed). The menu waits for a choice.
 | `build/` | Installer ISOs from pinned inputs: Debian netinst at a pinned sha256, vendored assets at pinned tag and hash, overlay Rust binaries byte-compared against the committed `core/dist/aarch64/` (`core/verify-dist.sh` checks those against the source) |
 | Installer | Unattended; parks visibly on failure instead of shipping a half-installed machine |
 | Vendored assets | Display names renamed to Ombra; upstream identifiers and licenses unchanged; provenance in `desktop/rootfs/usr/share/ombra-assets/README.md` |
-| Release images | `.vmwarevm.zip` (Fusion) and `.utm.zip` (UTM) archives exported from fresh installs, scrubbed of builder residue, plus the single VM installer ISO (`build/release-single-iso.sh`), all listed in `SHA256SUMS.txt`. `scripts/update/sign-sums.sh` can sign that file; no signature has been published yet |
+| Release images | `.vmwarevm.zip` (Fusion) and `.utm.zip` (UTM) archives exported from fresh installs, scrubbed of builder residue, plus the single VM installer ISO (`build/release-single-iso.sh`), all listed in `SHA256SUMS.txt`. `scripts/update/sign-sums.sh` signs that file with the update key; `SHA256SUMS.txt.sig` is published beside it from v1.2.0 |
 | Build residue | The install empties logs, apt lists and histories, then zeroes every free block that still holds an address of the installer's own NAT network (a deleted `resolv.conf` or installer syslog); a release install parks if such an address is in a live file under `/etc`, `/var`, `/root` or `/home`. Archives are zipped with no owner fields and UTC times; the ISO's files and its appended cpio are owned by root |
 
 ## Verification

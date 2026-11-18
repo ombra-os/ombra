@@ -52,8 +52,8 @@ is not needed for it.
    ```
 
    Every file you did download must report `OK`. This proves the
-   download is complete and undamaged, not who made it: `SHA256SUMS.txt`
-   comes from the same site, and no signature for it is published yet.
+   download is complete and undamaged; to prove `SHA256SUMS.txt` comes
+   from Ombra, also check its signature ([Verify the signature](#verify-the-signature)).
 2. Double-click each zip to unpack it, and move the two `.vmwarevm`
    folders into `~/Virtual Machines.localized/`.
    Then double-click each `.vmwarevm` to open it in Fusion. If Fusion asks
@@ -81,6 +81,27 @@ choice; nothing starts on its own.
 Pick **Persistent** for the desktop's first boot. You can restart into
 either mode at any time.
 
+## Verify the signature
+
+`SHA256SUMS.txt.sig` (from v1.2.0) is an Ed25519 signature of
+`SHA256SUMS.txt`, made with the key that signs Ombra updates. Take the
+public key from this repository on GitHub, not from the download host, so
+that one compromised host cannot swap the images, the hashes and the key
+together.
+
+| Step | Command | Expected |
+|---|---|---|
+| Signature | `curl -fLO https://dl.ombra-os.org/SHA256SUMS.txt.sig` | |
+| Public key | `curl -fLo update-pubkey.pem https://raw.githubusercontent.com/ombra-os/ombra/main/build/update-pubkey.pem` | |
+| Key fingerprint | `shasum -a 256 update-pubkey.pem` | `194b5338cf4000a2d34785c152e07fc2513912828f74380e0904f22d16e7a3fe` (also shown on [ombra-os.org/install](https://ombra-os.org/install)) |
+| Signature check | `"$(brew --prefix openssl@3)/bin/openssl" pkeyutl -verify -pubin -inkey update-pubkey.pem -rawin -in SHA256SUMS.txt -sigfile SHA256SUMS.txt.sig` | `Signature Verified Successfully` |
+| Hashes | `shasum -a 256 -c SHA256SUMS.txt --ignore-missing` | `OK` for every file you downloaded |
+
+Needs OpenSSL 3 (`brew install openssl@3`): the `/usr/bin/openssl` that
+ships with macOS cannot read Ed25519 keys. In a clone of this repository,
+`bash scripts/update/verify-sums.sh build/update-pubkey.pem SHA256SUMS.txt`
+does the signature and hash checks in one step.
+
 ## Quick start (two VMs): UTM
 
 The same two machines run under UTM instead of VMware Fusion. Pick one
@@ -89,7 +110,7 @@ hypervisor and use its archives; do not mix them.
 | Step | Detail |
 |---|---|
 | Host | Apple Silicon Mac, UTM 5.0.8 or newer (QEMU backend; Ombra does not use the Apple Virtualization backend) |
-| Download | `ombra-gateway-arm64-v1.2.0.utm.zip`, `ombra-desktop-arm64-v1.2.0.utm.zip` and `SHA256SUMS.txt`; verify with `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`. This proves the download is complete and undamaged, not who made it; no signature is published yet |
+| Download | `ombra-gateway-arm64-v1.2.0.utm.zip`, `ombra-desktop-arm64-v1.2.0.utm.zip` and `SHA256SUMS.txt`; verify with `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`. Check the signature too ([Verify the signature](#verify-the-signature)) |
 | Unpack | Double-click each zip in Finder, or run `ditto -x -k <zip> .` in a terminal |
 | Import | Double-click each `.utm` to add it to UTM. Nothing needs changing in the VM settings |
 | Start | Gateway first: pick a boot mode, wait for its connectivity panel. Then the desktop: pick **Persistent** for the first boot. First boot is identical to Fusion (see below) |
@@ -116,7 +137,7 @@ below are untested.
 | Item | Detail |
 |---|---|
 | File | `ombra-single-arm64-v<version>.iso` and `SHA256SUMS.txt`, from v1.2.0 or later (v1.1.0 does not have this edition). Or build it: `bash scripts/build.sh --edition single`, or `bash build/make-install-iso.sh single` after steps 1-3 below |
-| Verify | `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`. This proves the download is complete and undamaged, not who made it; no signature is published yet |
+| Verify | `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`, and the signature of `SHA256SUMS.txt` ([Verify the signature](#verify-the-signature)) |
 | Network during install | Needed. The installer downloads Debian packages over the VM's NAT, directly from Debian's mirror, not through Tor (see [threat model](THREAT_MODEL.md#two-vms-vs-single-vm)) |
 | Time | Depends on the network: about 5 to 10 minutes on a fast connection in testing |
 | Keyboard | US layout in the installer and at the unlock screen |

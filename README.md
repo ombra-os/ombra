@@ -64,7 +64,7 @@ How to install either: [docs/INSTALL.md](docs/INSTALL.md). The rest of this page
    shasum -a 256 -c SHA256SUMS.txt --ignore-missing
    ```
 
-   This proves the download is complete and undamaged, not who made it: the checksum file comes from the same site, and no signature for it is published yet
+   This proves the download is complete and undamaged. To prove `SHA256SUMS.txt` comes from Ombra, check its signature against the public key in this repository: [Verify the signature](docs/INSTALL.md#verify-the-signature)
 3. Unzip both archives and open them in VMware Fusion or UTM
 4. Power on the gateway, then the desktop; choose **Persistent** on the desktop for first boot
 5. Set your disk passphrase and password; the disk re-encrypts under a new key
