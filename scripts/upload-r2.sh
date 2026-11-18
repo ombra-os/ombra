@@ -70,19 +70,28 @@ if [ -z "$PREFIX" ]; then
     fi
   fi
 else
-  if [ "$#" -gt 0 ]; then IN=("$@"); else IN=("$REPO"/build/releases/updates/*.update "$REPO"/build/releases/updates/latest.txt "$REPO"/build/releases/updates/latest.txt.sig); fi
-  BUNDLES=(); IDX=""; IDXSIG=""
+  if [ "$#" -gt 0 ]; then IN=("$@"); else
+    U="$REPO/build/releases/updates"; IN=("$U"/*.update "$U/latest.txt" "$U/latest.txt.sig")
+    [ ! -f "$U/apps.txt" ] || IN+=("$U/apps.txt" "$U/apps.txt.sig")
+  fi
+  BUNDLES=(); IDX=""; IDXSIG=""; APPS=""; APPSSIG=""
   for f in ${IN[@]+"${IN[@]}"}; do
     [ -f "$f" ] || { echo "FATAL: $f not found" >&2; exit 1; }
     case "$(basename "$f")" in
       *.update) BUNDLES+=("$f") ;;
       latest.txt) IDX=$f ;;
       latest.txt.sig) IDXSIG=$f ;;
-      *) echo "FATAL: $f is not an update file (*.update, latest.txt, latest.txt.sig)" >&2; exit 1 ;;
+      apps.txt) APPS=$f ;;
+      apps.txt.sig) APPSSIG=$f ;;
+      *) echo "FATAL: $f is not an update file (*.update, latest.txt, apps.txt and their .sig)" >&2; exit 1 ;;
     esac
   done
   [ -n "$IDX" ] && [ -n "$IDXSIG" ] || { echo "FATAL: --prefix updates/ needs latest.txt and latest.txt.sig" >&2; exit 1; }
   ed25519_ok "$IDX" "$IDXSIG" || { echo "FATAL: latest.txt.sig does not verify against build/update-pubkey.pem" >&2; exit 1; }
+  if [ -n "$APPS$APPSSIG" ]; then
+    [ -n "$APPS" ] && [ -n "$APPSSIG" ] || { echo "FATAL: apps.txt and apps.txt.sig go together" >&2; exit 1; }
+    ed25519_ok "$APPS" "$APPSSIG" || { echo "FATAL: apps.txt.sig does not verify against build/update-pubkey.pem" >&2; exit 1; }
+  fi
   # every bundle the index names must be uploaded in this run and match the index
   for key in $(awk -F= '$1 ~ /\.bundle$/ {print $1}' "$IDX"); do
     role=${key%.bundle}; name=$(awk -F= -v k="$key" '$1==k{print $2}' "$IDX"); want=$(awk -F= -v k="$role.sha256" '$1==k{print $2}' "$IDX")
@@ -93,6 +102,7 @@ else
   done
   # bundles first, so the index never names a file that is not there yet
   FILES=(${BUNDLES[@]+"${BUNDLES[@]}"} "$IDX" "$IDXSIG")
+  [ -z "$APPS" ] || FILES+=("$APPS" "$APPSSIG")
 fi
 
 SUMS="$REPO/build/releases/SHA256SUMS.txt"
@@ -107,7 +117,7 @@ for f in "${FILES[@]}"; do
   name="$(basename "$f")"
   case "$f" in *-test*|*TEST*) echo "FATAL: refusing a test build: $f" >&2; exit 1 ;; esac
   ctype=application/octet-stream
-  case "$name" in SHA256SUMS.txt|latest.txt) ctype="text/plain; charset=utf-8" ;; esac
+  case "$name" in SHA256SUMS.txt|latest.txt|apps.txt) ctype="text/plain; charset=utf-8" ;; esac
   if [ -z "$PREFIX" ] && [ -f "$SUMS" ] && [ "$name" != SHA256SUMS.txt ] && [ "$name" != SHA256SUMS.txt.sig ]; then
     want="$(awk -v n="$name" '$2==n{print $1}' "$SUMS")"
     [ -n "$want" ] || { echo "FATAL: $name is not in SHA256SUMS.txt" >&2; exit 1; }

@@ -28,6 +28,20 @@ Debian security updates:
 | Scope | The packages of the machine it runs on. On the single VM edition that is the desktop only: the gateway container's image (Tor, dnsmasq, nftables) is fixed at install and changes only with an Ombra update for the `single` role that replaces it |
 | Availability | From v1.2.0, including v1.1.0 desktops updated to v1.2.0 |
 
+App updates (from 1.2.1):
+
+| Step | What happens |
+|---|---|
+| What | Tor Browser, Feather, SimpleX and Electrum, the apps Debian does not ship or ships too old. Each comes from its own project, so a fix does not wait for an Ombra release |
+| Notice | The same check that looks for Ombra updates fetches a small signed app list (`updates/apps.txt`). When a listed version is newer than the installed one, the desktop shows a notice |
+| Start | Update Ombra → **Update apps**, or `pkexec ombra-update apps apply` |
+| Verify | The app list is signed with Ombra's key and names each file's sha256 and size; the maintainer checks the project's own signature before listing a version. A download that does not match is discarded |
+| Network | Downloads go through Tor, from the project's own site (Tor Project, GitHub releases, electrum.org) |
+| Install | Each app is unpacked next to the old one and swapped in only when complete. An app that is open is left for later; one that fails keeps working at its previous version. No restart, no rollback point |
+| Your data | Profiles, bookmarks, wallets and chats stay where they are: Tor Browser's profile moves into the new browser unchanged |
+| Electrum | Runs the electrum.org release from `/opt/electrum` on Debian's Python, Qt 6, cryptography and libsecp256k1; missing ones are installed from Debian through Tor the first time |
+| Mode | Persistent mode only |
+
 What an update does to your data:
 
 | Machine | Update | Undo (rollback) |
@@ -78,6 +92,8 @@ What Update Ombra and `ombra-update check` report:
 | Payload | A tree of files that overlay `/` on the target, plus an optional `usr/local/lib/ombra-update/post.sh` that runs once after the files land |
 | Bundle | `scripts/update/make-bundle.sh <desktop\|gateway\|single> <version> <min-from> <payload-dir> <out-dir> <private-key>` writes `ombra-<role>-<version>.update` (signed manifest, signature, payload) |
 | Index | `scripts/update/make-index.sh <private-key> <out-dir> <valid-days> desktop=<bundle> gateway=<bundle> single=<bundle>` writes `latest.txt` and `latest.txt.sig`. The index expires, so a frozen mirror cannot hold machines back forever |
+| App list | Pin the new version in `build/pins/<app>.txt` after checking the project's signature, put the file in `build/vendor/`, then `scripts/update/make-apps.sh <out-dir> <valid-days> [private-key]` writes `apps.txt` (and `apps.txt.sig` with a key). Publish with `upload-r2.sh --prefix updates/`. Same `issued` and `expires` rules as the index |
+| Desktop bundles from 1.1 | `scripts/update/payload-desktop-from-1.1.sh <payload-dir> [ref]` builds one cumulative payload for 1.1 and later desktops (both editions); applications are not in it |
 | Publish updates | `bash scripts/upload-r2.sh --prefix updates/ <bundles> latest.txt latest.txt.sig` (default: `build/releases/updates/`). It checks the index signature and every bundle it names, then uploads the bundles before the index |
 | Release images | After the last export: `bash scripts/update/sign-sums.sh <private-key> build/releases/SHA256SUMS.txt` writes `SHA256SUMS.txt.sig`. `scripts/upload-r2.sh` uploads it with the archives, refuses a `.sig` that does not verify, and warns loudly when there is none. Every export rewrites `SHA256SUMS.txt`, so sign again after it |
 | Verify a download | `bash scripts/update/verify-sums.sh update-pubkey.pem SHA256SUMS.txt`. Needs OpenSSL 3; macOS's own `/usr/bin/openssl` (LibreSSL) cannot read Ed25519 keys (`brew install openssl@3`) |

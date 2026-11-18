@@ -33,7 +33,7 @@ Installation for both editions: [docs/INSTALL.md](docs/INSTALL.md). Unless noted
 - **Privacy applications included:** Tor Browser, KeePassXC, Kleopatra (OpenPGP), OnionShare, Electrum, Feather and SimpleX, all preset to use Tor
 - **Native arm64:** built for Apple Silicon, no emulation
 - **Pinned inputs:** the Debian installer, Tor Browser, Feather and SimpleX are pinned by hash; Debian packages are signed by Debian and every version in the image is recorded in `/usr/share/ombra/packages.txt`. Installing the two-VM archives downloads nothing; the single VM installer downloads Debian packages directly from Debian, not through Tor
-- **Updates on request:** signed Ombra updates, and Debian's security updates when you press a button, both through Tor; nothing installs on its own
+- **Updates on request:** signed Ombra updates, app updates for Tor Browser, Feather, SimpleX and Electrum straight from each project, and Debian's security updates when you press a button, all through Tor; nothing installs on its own
 
 ## Screens
 

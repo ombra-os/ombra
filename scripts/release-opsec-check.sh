@@ -161,7 +161,7 @@ for u in "$R"/updates/*.update; do
 done
 
 # ---- small text files ------------------------------------------------------------------------------------------------
-for s in "$R"/SHA256SUMS.txt "$R"/SHA256SUMS.txt.sig "$R"/updates/latest.txt "$R"/updates/latest.txt.sig; do
+for s in "$R"/SHA256SUMS.txt "$R"/SHA256SUMS.txt.sig "$R"/updates/latest.txt "$R"/updates/latest.txt.sig "$R"/updates/apps.txt "$R"/updates/apps.txt.sig; do
   [ -f "$s" ] || continue
   n="${s#"$R"/}"; f0=$FAIL
   scan "$n" "$s"
