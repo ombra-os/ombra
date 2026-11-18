@@ -1,0 +1,11 @@
+# Private keys that upstream software compiles in as fixed test vectors, identical on every Debian system.
+# scripts/release-opsec-check.sh lets these through and fails on any other key. Format: sha256 of the key's first
+# base64 line, two spaces, where it comes from. Add a line only after locating the key in an upstream file.
+8f642f0351e1761dd3f7d8934a2da0a5eacd7f8a2c0440d8e2bf58ff2a6e847d  libgnutls30 (/usr/lib/aarch64-linux-gnu/libgnutls.so.30): self-test key
+4b86104d3a39ae361925614ff33350c34aa8370b85a3b2e79ee407705a0af571  libgnutls30 (/usr/lib/aarch64-linux-gnu/libgnutls.so.30): self-test key
+c471252232a6e68f793ca59626059f9f33e390b628ab8a8e0188aec275b7fe47  libgnutls30 (/usr/lib/aarch64-linux-gnu/libgnutls.so.30): self-test key
+c50f38f5a25dad1abc4c3162635f014f05e857ae7e6b590f66b42793e27f9d37  libgnutls30 (/usr/lib/aarch64-linux-gnu/libgnutls.so.30): self-test key
+8dd51545b81e4a0a285630cfc608921c2523171d5cf57a8123116658baa84558  libgnutls30 (/usr/lib/aarch64-linux-gnu/libgnutls.so.30): self-test key
+36d32468a4353827c6db9a9477736adf7bb980c50854d0b57257f5132ef32d39  libgnutls30 (/usr/lib/aarch64-linux-gnu/libgnutls.so.30): self-test key
+e36ff64abc8431d1295824c32f55327df2af968b417a4073cc696a2332d3c370  libgnutls30 (/usr/lib/aarch64-linux-gnu/libgnutls.so.30): self-test key
+d76d8725f92d87288e0466d850892bf8dd7f487ad21d40f211612ebec68852a2  libgnutls30 (/usr/lib/aarch64-linux-gnu/libgnutls.so.30): self-test key

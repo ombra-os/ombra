@@ -1,5 +1,6 @@
 #!/bin/bash
-# Upload release files to a Cloudflare R2 bucket over its S3 API, then verify the public URL.
+# Upload release files to a Cloudflare R2 bucket over its S3 API, then verify the public URL. Every file must first pass
+# the OPSEC gate (scripts/release-opsec-check.sh), which records each passed file's sha256 in build/releases/.opsec-ok.
 # usage: bash scripts/upload-r2.sh [file ...]
 #          default: every build/releases/*.vmwarevm.zip and *.utm.zip, then SHA256SUMS.txt and SHA256SUMS.txt.sig.
 #          Every archive SHA256SUMS.txt names must be here and match; a missing .sig is warned about loudly
@@ -95,6 +96,13 @@ else
 fi
 
 SUMS="$REPO/build/releases/SHA256SUMS.txt"
+# the OPSEC gate (scripts/release-opsec-check.sh) must have passed every file, exactly as it is now
+GATE="$REPO/build/releases/.opsec-ok"
+for f in "${FILES[@]}"; do
+  rel="$PREFIX$(basename "$f")"
+  [ -f "$GATE" ] && [ "$(grep -c -x -F "$(shasum -a 256 "$f" | cut -d' ' -f1)  $rel" "$GATE" || true)" = 1 ] \
+    || { echo "FATAL: $rel has not passed the OPSEC gate as it is now: run bash scripts/release-opsec-check.sh" >&2; exit 1; }
+done
 for f in "${FILES[@]}"; do
   name="$(basename "$f")"
   case "$f" in *-test*|*TEST*) echo "FATAL: refusing a test build: $f" >&2; exit 1 ;; esac
