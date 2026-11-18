@@ -3,6 +3,6 @@
 # (facter/ansible-class facts) parses it; it mirrors VERSION_ID in
 # usr/lib/os-release and is never a human surface.
 DISTRIB_ID="Ombra"
-DISTRIB_RELEASE="1.2"
+DISTRIB_RELEASE="1.2.1"
 DISTRIB_CODENAME=trixie
 DISTRIB_DESCRIPTION="Ombra"

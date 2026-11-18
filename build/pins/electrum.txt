@@ -1,0 +1,16 @@
+# Electrum (Bitcoin) — upstream release tarball; runs from /opt/electrum on the system's Python, Qt 6, cryptography
+# and libsecp256k1 (Debian trixie). Installed through Update Ombra's app updates, not built into the images.
+# Provenance: Electrum-4.8.3.tar.gz.asc verified on 2026-11-18 against the release keys published in the Electrum
+# repository (pubkeys/): Thomas Voegtlin 6694D8DE7BE8EE5631BED9502BD5824B7F9470E6 and SomberNight
+# 0EEDCFD5CAFB459067349B23CA9EEEC43DF911DC (good signatures from both, plus a third signer).
+# 4.8.3 fixes GHSA-6jp4-8v48-cc5v (a malicious server could swap a signed transaction; exploited). The enforced anchor
+# is the sha256 below.
+version=4.8.3
+file=Electrum-4.8.3.tar.gz
+sha256=df41fa82e579f720a3859bff9de09dd98bb93079b01fa2973b73fdbdbfde7288
+signer=Thomas Voegtlin <thomasv@electrum.org>; SomberNight <somber.night@protonmail.com>
+signer_fingerprint=6694D8DE7BE8EE5631BED9502BD5824B7F9470E6 0EEDCFD5CAFB459067349B23CA9EEEC43DF911DC
+signature=Electrum-4.8.3.tar.gz.asc
+license=MIT
+url=https://download.electrum.org/4.8.3/
+archive_url=https://download.electrum.org/4.8.3/

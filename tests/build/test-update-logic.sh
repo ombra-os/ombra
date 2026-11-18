@@ -32,7 +32,7 @@ cat > "$S/curl" <<'EOF'
 #!/bin/bash
 # serves $SRV for https://upd.test/; logs every call
 out=""; max=""; url=""
-while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift ;; -w|--proto|--socks5-hostname|--connect-timeout|--max-time) shift ;; --max-filesize) max=$2; shift ;; -*) ;; *) url=$1 ;; esac; shift; done
+while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift ;; -w|--proto|--proto-redir|--max-redirs|--socks5-hostname|--connect-timeout|--max-time) shift ;; --max-filesize) max=$2; shift ;; -*) ;; *) url=$1 ;; esac; shift; done
 echo "max=${max:-none} $url" >> "$CURL_LOG"
 [ -z "${FAKE_CURL_FAIL:-}" ] || { echo "curl: (7) Failed to connect" >&2; exit 7; }
 f="$SRV/${url#https://upd.test/}"
@@ -95,6 +95,16 @@ upgrade)
 esac
 exit 0
 EOF
+cat > "$S/dpkg-query" <<'EOF'
+#!/bin/sh
+# -W -f '${Version}' <pkg>: FAKE_VER_<pkg>; -W -f '${Status}' <pkg>: installed unless named in FAKE_MISSING
+eval "p=\${$#}"
+case "$*" in
+    *Status*) case " ${FAKE_MISSING:-} " in *" $p "*) exit 1 ;; esac; printf 'install ok installed' ;;
+    *) v=$(eval "printf '%s' \"\${FAKE_VER_$(printf '%s' "$p" | tr -c 'a-z0-9\n' _):-}\""); [ -n "$v" ] || exit 1; printf '%s' "$v" ;;
+esac
+EOF
+printf '#!/bin/sh\ncase "$*" in *"${FAKE_RUNNING:-@none@}"*) exit 0 ;; esac\nexit 1\n' > "$S/pgrep"
 printf '#!/bin/sh\necho 0\n' > "$S/id"
 printf '#!/bin/sh\n[ -z "${FAKE_LOCKED:-}" ]\n' > "$S/flock"
 printf '#!/bin/sh\nshasum -a 256 "$@"\n' > "$S/sha256sum"
@@ -133,10 +143,10 @@ chmod 0755 "$S"/* "$T/ossl/openssl"
 
 # ---- the updater, with its fixed paths moved into the fake root ----
 R="$T/root"; U="$T/ombra-update"; export R
-sed -e 's|/etc/|@ROOT@/etc/|g; s|/usr/|@ROOT@/usr/|g; s|/var/lib/|@ROOT@/var/lib/|g; s|/var/cache/|@ROOT@/var/cache/|g; s|/run/|@ROOT@/run/|g; s|/proc/|@ROOT@/proc/|g; s|^BOOTDIR=/boot$|BOOTDIR=@ROOT@/boot|' \
+sed -e 's|/etc/|@ROOT@/etc/|g; s|/usr/|@ROOT@/usr/|g; s|/var/lib/|@ROOT@/var/lib/|g; s|/var/cache/|@ROOT@/var/cache/|g; s|/run/|@ROOT@/run/|g; s|/proc/|@ROOT@/proc/|g; s|/opt/|@ROOT@/opt/|g; s|/var/tmp/|@ROOT@/var/tmp/|g; s|^BOOTDIR=/boot$|BOOTDIR=@ROOT@/boot|' \
     -e 's|-C / |-C @ROOT@/ |g; s|"/\$f"|"@ROOT@/$f"|g; s|/\.ombra-rw-test|@ROOT@/.ombra-rw-test|g' \
     -e '1s|^#!@ROOT@|#!|' -e "s|@ROOT@|$R|g" "$REPO/update/rootfs/usr/local/sbin/ombra-update" > "$U"
-grep -qE '(^|[^X])/(etc|usr|var/lib|var/cache|run|proc)/|^BOOTDIR=/' <(sed "s|$R|@ROOTX|g" "$U" | grep -v '^ *#') && bad "a fixed path escaped the rewrite" || ok "every fixed path is inside the fake root"
+grep -qE '(^|[^X])/(etc|usr|var/lib|var/cache|var/tmp|opt|run|proc)/|^BOOTDIR=/' <(sed "s|$R|@ROOTX|g" "$U" | grep -v '^ *#') && bad "a fixed path escaped the rewrite" || ok "every fixed path is inside the fake root"
 
 # ---- keys and fixtures ----
 "$OSSL" genpkey -algorithm ed25519 -out "$T/sign.key" 2>/dev/null; "$OSSL" pkey -in "$T/sign.key" -pubout -out "$T/pub.pem"
@@ -388,5 +398,60 @@ OPENSSL="$OSSL" bash "$REPO/scripts/update/verify-sums.sh" "$T/pub.pem" "$T/rel/
 echo tampered > "$T/rel/ombra-x.utm.zip"
 OPENSSL="$OSSL" bash "$REPO/scripts/update/verify-sums.sh" "$T/pub.pem" "$T/rel/SHA256SUMS.txt" >/dev/null 2>&1 && bad "verify-sums passed a changed archive" || ok "verify-sums catches a changed archive"
 PATH="$OPATH" bash "$REPO/scripts/update/sign-sums.sh" "$T/sign.key" "$T/rel/SHA256SUMS.txt" >/dev/null 2>&1 && bad "sign-sums signed sums that do not match" || ok "sign-sums refuses sums that do not match the archives"
+
+# ---- app updates (apps.txt) ----
+A="$T/apps"; mkdir -p "$A/e/Electrum-4.8.3" "$A/tb/tor-browser/Browser"
+printf '#!/bin/sh\n' > "$A/e/Electrum-4.8.3/run_electrum"
+COPYFILE_DISABLE=1 /usr/bin/tar -czf "$A/electrum.tar.gz" -C "$A/e" Electrum-4.8.3
+echo bin > "$A/tb/tor-browser/Browser/firefox"
+COPYFILE_DISABLE=1 /usr/bin/tar -cJf "$A/tb.tar.xz" -C "$A/tb" tor-browser
+apps_list() { # app list from lines, signed
+    printf '%s\n' "$@" > "$SRV/updates/apps.txt"; sign "$SRV/updates/apps.txt"
+}
+apps_root() {
+    reset_root desktop 1.2.1; mkdir -p "$SRV/dl" "$R/opt/tor-browser/Browser/TorBrowser/Data/Browser" "$R/opt/tor-browser/Browser/distribution" "$R/var/tmp"
+    cp "$A/electrum.tar.gz" "$A/tb.tar.xz" "$SRV/dl/"
+    printf '{"version":"16.0.1"}\n' > "$R/opt/tor-browser/Browser/tbb_version.json"
+    echo bookmarks > "$R/opt/tor-browser/Browser/TorBrowser/Data/Browser/places"; echo '{}' > "$R/opt/tor-browser/Browser/distribution/policies.json"
+    index "issued=$NOW" "expires=$((NOW + 86400))" "desktop.version=1.2.1" "desktop.bundle=x.update" "desktop.sha256=00"
+    E="electrum.version=4.8.3 electrum.url=https://upd.test/dl/electrum.tar.gz electrum.sha256=$(h "$A/electrum.tar.gz") electrum.size=$(sz "$A/electrum.tar.gz")"
+}
+export FAKE_VER_electrum=4.5.8+ds-5 FAKE_VER_simplex=7.1.4-1~noble
+apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))" $E "torbrowser.version=16.0.1" "torbrowser.url=https://upd.test/dl/tb.tar.xz" "torbrowser.sha256=$(h "$A/tb.tar.xz")" "torbrowser.size=$(sz "$A/tb.tar.xz")"
+run check; check "check lists app updates newer than installed (Electrum 4.5.8 -> 4.8.3), not current ones (Tor Browser)" '[ "$RC" = 0 ] && [ "$(state)" = current ] && [ "$(cat "$R/run/ombra/apps")" = "electrum 4.8.3" ]'
+echo "electrum.version=9.9" >> "$SRV/updates/apps.txt"
+run check; check "a tampered app list changes nothing and does not fail the Ombra check" '[ "$RC" = 0 ] && [ "$(cat "$R/run/ombra/apps")" = "electrum 4.8.3" ]'
+apps_list "issued=$((NOW - 100))" "expires=$((NOW + 86400))" "electrum.version=9.9"
+run check; check "an app list older than one already seen is ignored" '[ "$(cat "$R/run/ombra/apps")" = "electrum 4.8.3" ]'
+apps_list "issued=$((NOW + 1))" "expires=$((NOW - 1))" "electrum.version=9.9"
+run check; check "an expired app list is ignored" '[ "$(cat "$R/run/ombra/apps")" = "electrum 4.8.3" ]'
+rm -f "$SRV/updates/apps.txt" "$SRV/updates/apps.txt.sig"
+run check; check "no app list published: no app updates" '[ ! -e "$R/run/ombra/apps" ]'
+
+apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))" $E
+run apps apply; check "apps apply installs Electrum into /opt/electrum with its version" '[ "$RC" = 0 ] && [ -f "$R/opt/electrum/run_electrum" ] && [ "$(cat "$R/opt/electrum/.ombra-version")" = 4.8.3 ] && grep -q "installed Electrum 4.8.3" "$T/out"'
+check "the download is capped at the listed size and nothing is left behind" 'grep -q "max=$(sz "$A/electrum.tar.gz") https://upd.test/dl/electrum.tar.gz$" "$CURL_LOG" && [ ! -e "$R/var/lib/ombra-update/app-electrum" ] && [ ! -e "$R/opt/electrum.next" ]'
+check "once installed, Electrum is no longer offered" '[ ! -e "$R/run/ombra/apps" ] && [ "$(env PATH="$S:$PATH" "$SHELL_UNDER_TEST" "$U" apps list 2>/dev/null)" = "" ]'
+check "no Debian packages were fetched when Electrum's are installed" '! grep -q "apt-get.* install" "$APT_LOG"'
+
+apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))" "electrum.version=4.8.3" "electrum.url=https://upd.test/dl/electrum.tar.gz" "electrum.sha256=$(printf 0%.0s $(seq 64))" "electrum.size=$(sz "$A/electrum.tar.gz")"
+mkdir -p "$R/opt/electrum"; echo old > "$R/opt/electrum/run_electrum"
+run apps apply; check "a download that does not match the signed list is refused; the previous version stays (exit 1)" '[ "$RC" = 1 ] && [ "$(cat "$R/opt/electrum/run_electrum")" = old ] && grep -q "does not match the signed app list" "$T/out"'
+
+apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))" $E
+FAKE_RUNNING=run_electrum run apps apply; check "an open app is left for later (exit 6)" '[ "$RC" = 6 ] && [ ! -e "$R/opt/electrum" ] && grep -q "skipped Electrum 4.8.3" "$T/out"'
+
+apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))" $E
+FAKE_MISSING="python3-pyqt6" run apps apply; check "missing Debian packages for Electrum come from Debian through Tor, then the lists are removed" '[ "$RC" = 0 ] && grep -q "apt-get .*socks5h://10.55.10.1:9050.* update" "$APT_LOG" && grep -q "apt-get .* install python3-pyqt6" "$APT_LOG" && [ -z "$(ls "$R/var/lib/apt/lists" 2>/dev/null)" ]'
+
+apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))" "torbrowser.version=16.0.2" "torbrowser.url=https://upd.test/dl/tb.tar.xz" "torbrowser.sha256=$(h "$A/tb.tar.xz")" "torbrowser.size=$(sz "$A/tb.tar.xz")"
+run apps apply; check "a Tor Browser update keeps the profile and Ombra's policies" '[ "$RC" = 0 ] && [ "$(cat "$R/opt/tor-browser/Browser/TorBrowser/Data/Browser/places")" = bookmarks ] && [ -f "$R/opt/tor-browser/Browser/distribution/policies.json" ] && [ -f "$R/opt/tor-browser/Browser/firefox" ] && [ ! -e "$R/opt/tor-browser.next" ] && [ ! -e "$R/opt/tor-browser.old" ]'
+
+apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))" "electrum.version=4.8.3" "electrum.url=http://upd.test/dl/electrum.tar.gz" "electrum.sha256=$(h "$A/electrum.tar.gz")" "electrum.size=$(sz "$A/electrum.tar.gz")"
+run apps apply; check "an app download that is not https is refused" '[ "$RC" = 1 ] && [ ! -e "$R/opt/electrum" ] && ! grep -q "dl/electrum" "$CURL_LOG"'
+
+apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))" $E
+FAKE_FSTYPE=overlay run apps apply; check "app updates refuse an Amnesic boot" '[ "$RC" = 1 ] && [ ! -e "$R/opt/electrum" ]'
+reset_root gateway 1.2; run apps apply; check "app updates are for the desktop" '[ "$RC" = 1 ]'
 
 [ "$FAILS" -eq 0 ] && echo "ALL PASS" || { echo "$FAILS FAILED"; exit 1; }

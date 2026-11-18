@@ -6,6 +6,8 @@
 #   status     print the last check result
 #   info       print edition, role, version, boot mode and disk layout as key=value lines (no root needed)
 #   apply      download, verify and apply the update (root, Persistent mode only)
+#   apps       list app updates (Tor Browser, Feather, SimpleX, Electrum); `apps apply [app...]` installs them from
+#              their projects through Tor, checked against the signed app list (root, Persistent mode only)
 #   security   install pending Debian updates from Debian through Tor (root, Persistent mode only; the gateway,
 #              which cannot undo them, needs --no-rollback)
 #   rollback   undo the last update (needs a reboot)
@@ -132,6 +134,7 @@ fetch_index() { # sets IDX to a verified index file; 1 unreachable, 2 bad signat
 
 cmd_check() {
     [ -n "$BASE_URL" ] || die "no update URL configured"
+    apps_check
     rc=0; fetch_index || rc=$?
     case "$rc" in
         0) ;;
@@ -482,6 +485,206 @@ cmd_security() {
     return 0
 }
 
+# ---- app updates: Tor Browser, Feather, SimpleX and Electrum come from their own projects, so a fix in one of them does
+# not wait for an Ombra release. The signed app list (apps.txt, same key as the release index) names each version, its
+# upstream download and its sha256; the maintainer checks the upstream signatures before listing a version. Downloads
+# go through Tor. Each app is unpacked next to the old one and swapped in only when complete, so a failed or skipped
+# app keeps working as it was; nothing here needs a restart or a rollback point.
+
+APPS="torbrowser feather simplex electrum"
+
+fetch_apps() { # sets AIDX to a verified app list; 1 unreachable, 2 bad signature, 3 none published, 4 replayed
+    mkdir -p "$STATE"
+    AIDX="$STATE/apps.txt"
+    fetch "$BASE_URL/apps.txt" "$AIDX.new" "$INDEX_MAX"; c=$?
+    if [ "$c" = 22 ] && [ "$FETCH_CODE" = 404 ]; then return 3; fi
+    [ "$c" = 0 ] || return 1
+    fetch "$BASE_URL/apps.txt.sig" "$AIDX.sig.new" "$INDEX_MAX" || { rm -f "$AIDX.new"; return 1; }
+    verify "$AIDX.new" "$AIDX.sig.new" || { rm -f "$AIDX.new" "$AIDX.sig.new"; return 2; }
+    iss=$(kv "$AIDX.new" issued); last=$(cat "$STATE/apps-issued" 2>/dev/null)
+    is_num "$iss" || { rm -f "$AIDX.new" "$AIDX.sig.new"; return 2; }
+    is_num "$last" && [ "$iss" -lt "$last" ] && { rm -f "$AIDX.new" "$AIDX.sig.new"; return 4; }
+    exp=$(kv "$AIDX.new" expires)
+    is_num "$exp" && [ "$(date +%s)" -le "$exp" ] || { rm -f "$AIDX.new" "$AIDX.sig.new"; return 4; }
+    mv "$AIDX.new" "$AIDX"; mv "$AIDX.sig.new" "$AIDX.sig"
+    printf '%s\n' "$iss" > "$STATE/apps-issued"
+    return 0
+}
+
+app_installed() { # the installed version of an app, 0 when absent or unknown (an unknown version is offered the listed one)
+    v=""
+    case "$1" in
+        torbrowser) v=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' /opt/tor-browser/Browser/tbb_version.json 2>/dev/null | head -n1) ;;
+        feather) v=$(cat /opt/feather/.ombra-version 2>/dev/null) ;;
+        simplex) v=$(dpkg-query -W -f '${Version}' simplex 2>/dev/null); v=${v%%-*} ;;
+        electrum)
+            if [ -f /opt/electrum/.ombra-version ]; then v=$(cat /opt/electrum/.ombra-version)
+            else v=$(dpkg-query -W -f '${Version}' electrum 2>/dev/null); v=${v%%+*}; v=${v%%-*}; fi ;;
+    esac
+    valid_value "${v:-}" && printf '%s\n' "$v" || printf '0\n'
+}
+
+app_running() {
+    case "$1" in
+        torbrowser) pgrep -f '/opt/tor-browser/Browser/' ;;
+        feather) pgrep -f '/opt/feather/' ;;
+        simplex) pgrep -f '/opt/simplex/' ;;
+        electrum) pgrep -f 'run_electrum|/usr/bin/electrum' ;;
+    esac >/dev/null 2>&1
+}
+
+app_name() {
+    case "$1" in torbrowser) echo "Tor Browser" ;; feather) echo Feather ;; simplex) echo SimpleX ;; electrum) echo Electrum ;; esac
+}
+
+apps_pending() { # needs a verified AIDX: "<app> <version>" for each listed app newer than the installed one
+    for a in $APPS; do
+        v=$(kv "$AIDX" "$a.version"); valid_value "${v:-}" || continue
+        dpkg --compare-versions "$v" gt "$(app_installed "$a")" && printf '%s %s\n' "$a" "$v"
+    done
+    return 0
+}
+
+apps_check() { # desktop only, never fatal: writes /run/ombra/apps (one "<app> <version>" line per update) or removes it
+    [ "$ROLE" = desktop ] || return 0
+    rc=0; fetch_apps || rc=$?
+    mkdir -p "$RUNDIR"
+    case "$rc" in
+        0) apps_pending > "$RUNDIR/apps.new" && mv "$RUNDIR/apps.new" "$RUNDIR/apps" ;;
+        3) rm -f "$RUNDIR/apps" ;;
+        *) ;;   # unreachable or not trusted: keep what the last good check said
+    esac
+    [ ! -s "$RUNDIR/apps" ] || say "app updates available: $(awk '{ printf "%s %s  ", $1, $2 }' "$RUNDIR/apps")"
+    return 0
+}
+
+fetch_app() { # url dest max-bytes: like fetch, following redirects (release downloads move to a CDN), https only
+    FETCH_CODE=$(curl -sS -L --max-redirs 5 --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 60 --max-time 3600 \
+        --max-filesize "$3" --socks5-hostname "$SOCKS" -o "$2" -w '%{http_code}' "$1") || { rm -f "$2"; return 1; }
+    [ "$FETCH_CODE" = 200 ] && return 0
+    rm -f "$2"; return 22
+}
+
+swap_dir() { # new-dir target: the new tree replaces the target in two renames
+    rm -rf "$2.old"
+    [ ! -e "$2" ] || mv "$2" "$2.old" || return 1
+    mv "$1" "$2" || { [ ! -e "$2.old" ] || mv "$2.old" "$2"; return 1; }
+    rm -rf "$2.old"
+}
+
+install_torbrowser() { # file version
+    N=/opt/tor-browser.next; O=/opt/tor-browser
+    rm -rf "$N"; mkdir -p "$N"
+    tar -xJf "$1" -C "$N" --strip-components=1 --no-same-owner 2>/dev/null && [ -e "$N/Browser/firefox" ] || { rm -rf "$N"; return 1; }
+    chmod -R a+rX "$N"
+    rm -rf "$N/Browser/TorBrowser/Data"
+    mkdir -p "$N/Browser/distribution"
+    [ ! -f "$O/Browser/distribution/policies.json" ] || cp -p "$O/Browser/distribution/policies.json" "$N/Browser/distribution/"
+    # the profile (bookmarks, settings, Ombra's proxy preset) moves across unchanged: one rename on the same disk
+    if [ -d "$O/Browser/TorBrowser/Data" ]; then
+        mkdir -p "$N/Browser/TorBrowser"
+        mv "$O/Browser/TorBrowser/Data" "$N/Browser/TorBrowser/Data" || { rm -rf "$N"; return 1; }
+    fi
+    if ! swap_dir "$N" "$O"; then
+        [ ! -d "$N/Browser/TorBrowser/Data" ] || mv "$N/Browser/TorBrowser/Data" "$O/Browser/TorBrowser/Data"
+        rm -rf "$N"; return 1
+    fi
+    [ ! -f "$O/Browser/browser/chrome/icons/default/default48.png" ] \
+        || cp "$O/Browser/browser/chrome/icons/default/default48.png" /usr/share/icons/hicolor/48x48/apps/tor-browser.png
+}
+
+install_feather() { # file version
+    W=/var/tmp/ombra-feather; rm -rf "$W"; mkdir -p "$W"
+    cp "$1" "$W/f.AppImage" && chmod 0755 "$W/f.AppImage" || { rm -rf "$W"; return 1; }
+    (cd "$W" && ./f.AppImage --appimage-extract >/dev/null 2>&1)
+    [ -x "$W/squashfs-root/usr/bin/feather" ] || { rm -rf "$W"; return 1; }
+    printf '%s\n' "$2" > "$W/squashfs-root/.ombra-version"
+    chmod -R a+rX "$W/squashfs-root"
+    swap_dir "$W/squashfs-root" /opt/feather || { rm -rf "$W"; return 1; }
+    rm -rf "$W"
+}
+
+install_simplex() { # file version: the package may only install itself and remove nothing
+    plan=$(sys apt-get -s -q --no-download -o Debug::NoLocking=1 install "$1" 2>&1) || return 1
+    extra=$(printf '%s\n' "$plan" | awk '($1 == "Inst" && $2 != "simplex") || $1 == "Remv" { print $1, $2 }')
+    [ -z "$extra" ] || { say "SimpleX would also change: $extra"; return 1; }
+    sys dpkg --force-confold -i "$1" >/dev/null 2>&1 && [ -x /opt/simplex/bin/simplex ]
+}
+
+ELECTRUM_DEBS="python3-pyqt6 python3-cryptography libsecp256k1-2"
+install_electrum() { # file version: the release tarball runs as is; the system supplies Qt 6, cryptography, libsecp256k1
+    missing=""
+    for p in $ELECTRUM_DEBS; do
+        sys dpkg-query -W -f '${Status}' "$p" 2>/dev/null | grep -q 'ok installed' || missing="$missing $p"
+    done
+    if [ -n "$missing" ]; then
+        say "Electrum needs Debian packages:$missing (fetched from Debian through Tor)"
+        L="$STATE/apt.log"; : > "$L"
+        apt_get -q update --error-on=any >> "$L" 2>&1 || { apt_clean; say "could not fetch Debian's package lists through Tor"; return 1; }
+        plan=$(apt_get -s -q --no-install-recommends install $missing 2>&1) || { apt_clean; return 1; }
+        rm_list=$(printf '%s\n' "$plan" | awk '$1 == "Remv" { printf "%s ", $2 }')
+        [ -z "$rm_list" ] || { apt_clean; say "Electrum's packages would remove: $rm_list"; return 1; }
+        apt_get -y -q --no-install-recommends -o Dpkg::Options::=--force-confold install $missing >> "$L" 2>&1 || { apt_clean; tail -n 4 "$L"; return 1; }
+        apt_clean; rm -f "$L"
+    fi
+    N=/opt/electrum.next; rm -rf "$N"; mkdir -p "$N"
+    tar -xzf "$1" -C "$N" --strip-components=1 --no-same-owner 2>/dev/null && [ -f "$N/run_electrum" ] || { rm -rf "$N"; return 1; }
+    printf '%s\n' "$2" > "$N/.ombra-version"
+    chmod -R a+rX "$N"
+    swap_dir "$N" /opt/electrum || { rm -rf "$N"; return 1; }
+}
+
+cmd_apps() {
+    case "${1:-list}" in
+        list)
+            [ "$ROLE" = desktop ] || die "app updates are for the desktop"
+            rc=0; fetch_apps || rc=$?
+            case "$rc" in 0) ;; 2) die "the app list failed its signature check" ;; 3) say "no app list published"; exit 0 ;; 4) die "the app list is out of date" ;; *) die_code 75 "could not reach the update server through Tor" ;; esac
+            apps_pending; exit 0 ;;
+        apply) shift ;;
+        *) say "usage: ombra-update apps [list|apply [app...]]"; exit 2 ;;
+    esac
+    need_root apps
+    [ "$ROLE" = desktop ] || die "app updates are for the desktop"
+    take_lock || die "another ombra-update is running"
+    root_writable || die "this boot is Amnesic (or the disk is read-only): restart in Persistent mode to update apps"
+    [ ! -e "$STATE/applying" ] || die "the last update did not finish: run ombra-update rollback first"
+    [ -n "$BASE_URL" ] || die "no update URL configured"
+    rc=0; fetch_apps || rc=$?
+    case "$rc" in 0) ;; 2) die "the app list failed its signature check; nothing was installed" ;; 3) die "no app list is published" ;; 4) die "the app list is out of date; nothing was installed" ;; *) die_code 75 "could not reach the update server through Tor; nothing was installed" ;; esac
+    want="$*"
+    apps_pending > "$STATE/apps.todo"
+    done_n=0; fail_n=0; skip_n=0
+    while read -r a v; do
+        [ -z "$want" ] || case " $want " in *" $a "*) ;; *) continue ;; esac
+        name=$(app_name "$a")
+        if app_running "$a"; then say "skipped $name $v: close $name, then update again"; skip_n=$((skip_n + 1)); continue; fi
+        url=$(kv "$AIDX" "$a.url"); sum=$(kv "$AIDX" "$a.sha256"); size=$(kv "$AIDX" "$a.size")
+        valid_value "${url:-}" && valid_value "${sum:-}" && is_num "${size:-}" || { say "failed $name: the app list entry is malformed"; fail_n=$((fail_n + 1)); continue; }
+        case "$url" in https://*) ;; *) say "failed $name: not an https download"; fail_n=$((fail_n + 1)); continue ;; esac
+        free=$(free_kb "$STATE"); need=$((4 * (size / 1024 + 1) + 524288))
+        [ "$free" -gt "$need" ] 2>/dev/null || { say "failed $name: not enough free space (need $((need / 1024)) MB)"; fail_n=$((fail_n + 1)); continue; }
+        say "Downloading $name $v through Tor"
+        F="$STATE/app-$a"; rm -f "$F"
+        if ! fetch_app "$url" "$F" "$size"; then
+            u2=$(kv "$AIDX" "$a.url2")
+            if ! { valid_value "${u2:-}" && case "$u2" in https://*) true ;; *) false ;; esac && fetch_app "$u2" "$F" "$size"; }; then
+                say "failed $name: download failed"; fail_n=$((fail_n + 1)); continue
+            fi
+        fi
+        [ "$(sha "$F")" = "$sum" ] || { rm -f "$F"; say "failed $name: the download does not match the signed app list"; fail_n=$((fail_n + 1)); continue; }
+        if "install_$a" "$F" "$v"; then say "installed $name $v"; done_n=$((done_n + 1)); else say "failed $name: it could not be installed; the previous version stays"; fail_n=$((fail_n + 1)); fi
+        rm -f "$F"
+    done < "$STATE/apps.todo"
+    rm -f "$STATE/apps.todo"
+    sys update-desktop-database -q >/dev/null 2>&1 || true
+    apps_pending > "$RUNDIR/apps" 2>/dev/null; [ -s "$RUNDIR/apps" ] || rm -f "$RUNDIR/apps"
+    say "app updates: $done_n installed, $skip_n skipped, $fail_n failed"
+    [ "$fail_n" = 0 ] || exit 1
+    [ "$skip_n" = 0 ] || exit 6
+    exit 0
+}
+
 cmd_rollback_now() {
     if [ "$ROLE" = desktop ]; then
         lvs "$VG/$SNAP" >/dev/null 2>&1 || { say "no rollback point"; return 1; }
@@ -551,7 +754,8 @@ case "${1:-}" in
     info) cmd_info ;;
     apply) cmd_apply ;;
     security) shift; cmd_security "$@" ;;
+    apps) shift; cmd_apps "$@" ;;
     rollback) cmd_rollback ;;
     commit) cmd_commit ;;
-    *) say "usage: ombra-update check|status|info|apply|security [--no-rollback]|rollback|commit"; exit 2 ;;
+    *) say "usage: ombra-update check|status|info|apply|apps [list|apply [app...]]|security [--no-rollback]|rollback|commit"; exit 2 ;;
 esac

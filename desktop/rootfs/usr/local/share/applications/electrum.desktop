@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Electrum Bitcoin Wallet
+GenericName=Bitcoin Wallet
+Comment=Bitcoin wallet, connected through Tor
+Exec=/usr/local/bin/electrum %u
+Icon=electrum
+Terminal=false
+Categories=Finance;Network;
+StartupNotify=true
+StartupWMClass=Electrum
+MimeType=x-scheme-handler/bitcoin;
+Keywords=bitcoin;btc;wallet;crypto

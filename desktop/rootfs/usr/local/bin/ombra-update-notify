@@ -1,5 +1,5 @@
 #!/bin/sh
-# Tell the user when the boot-time check found an update, and again every six hours until it is applied.
+# Tell the user when the boot-time check found an Ombra or app update, and again every six hours until it is applied.
 # The check runs as root a few minutes after boot and daily; KDE shows the notice until it is dismissed,
 # and clicking it opens Update Ombra.
 LOCK="${XDG_RUNTIME_DIR:-/tmp}/ombra-update-notify.pid"
@@ -30,7 +30,7 @@ notify() { # [icon title body]
         2 default "Update Ombra" 0 0 2>/dev/null | awk '{print $2}' > "$IDFILE"
 }
 
-told=0; warned=0
+told=0; atold=0; warned=0
 while :; do
     state=$(head -n1 /run/ombra/update 2>/dev/null)
     if [ "$state" = available ]; then
@@ -38,6 +38,16 @@ while :; do
         told=$((told + 1))
     else
         told=0
+    fi
+    # app updates (no Ombra update waiting): said at once, then every six hours, like an Ombra update
+    if [ "$state" != available ] && [ -s /run/ombra/apps ]; then
+        if [ "$atold" -eq 0 ] || [ "$atold" -ge 1080 ]; then
+            notify system-software-update "App updates are available" "$(awk '{ n = $1; if (n == "torbrowser") n = "Tor Browser"; else if (n == "feather") n = "Feather"; else if (n == "simplex") n = "SimpleX"; else if (n == "electrum") n = "Electrum"; printf "%s%s %s", (NR > 1 ? ", " : ""), n, $2 }' /run/ombra/apps). Click here, or open Update Ombra."
+            atold=0
+        fi
+        atold=$((atold + 1))
+    else
+        atold=0
     fi
     # a failed signature check is said once per session (until the state changes): nothing was installed
     if [ "$state" = invalid ]; then

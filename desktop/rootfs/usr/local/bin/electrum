@@ -1,0 +1,8 @@
+#!/bin/sh
+# Electrum: the release from electrum.org that Update Ombra installs into /opt/electrum (app updates), else Debian's.
+# Its settings, wallets and Ombra's Tor preset live in ~/.electrum either way.
+export QT_QPA_PLATFORM=xcb
+if [ -f /opt/electrum/run_electrum ]; then
+    exec /usr/bin/python3 /opt/electrum/run_electrum "$@"
+fi
+exec /usr/bin/electrum "$@"
