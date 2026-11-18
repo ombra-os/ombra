@@ -15,15 +15,12 @@
   <a href="SECURITY.md">Security</a>
 </p>
 
-> om·bra /'om.brä/ · italian, noun / 1. shadow. / 2. this machine:
-> everything it does online passes through tor. you were never here.
-
 | Edition | What it is | Ships as |
 |---|---|---|
 | Two VMs (default) | Gateway VM + desktop VM: the hypervisor separates Tor's side from your apps | Prebuilt VM archives for Fusion and UTM |
 | Single VM | One VM: the gateway runs as a container inside the desktop. Easier, weaker isolation ([comparison](docs/THREAT_MODEL.md#two-vms-vs-single-vm)) | An installer ISO for a VM you create; tested on Fusion, untested on UTM |
 
-How to install either: [docs/INSTALL.md](docs/INSTALL.md). The rest of this page describes the two-VM edition unless it says otherwise.
+Installation for both editions: [docs/INSTALL.md](docs/INSTALL.md). Unless noted, this page describes the two-VM edition.
 
 ## Features
 
@@ -31,8 +28,8 @@ How to install either: [docs/INSTALL.md](docs/INSTALL.md). The rest of this page
 - **Fail-closed:** if Tor is down, the desktop has no network at all
 - **Amnesic or persistent:** you choose at every boot; nothing starts on its own
 - **Encrypted at rest:** LUKS2 (argon2id) and encrypted swap on the desktop
-- **No telemetry:** no analytics, no accounts, no exit IP shown or logged. The only automatic requests are a signed update check, a Tor exit check (the desktop status light, and the gateway console panel at each login), and a clock check, all through Tor and none carrying anything about you; the full list is in the [threat model](docs/THREAT_MODEL.md#designed-runtime-probes)
-- **IPv6 off, generic identity, Tor-only DNS:** the clock starts from the Mac at boot and is corrected over Tor
+- **No telemetry:** no analytics and no accounts; the exit IP is never shown or logged. The only automatic requests are a signed update check, a Tor exit check and a clock check, all through Tor ([full list](docs/THREAT_MODEL.md#designed-runtime-probes))
+- **Network hygiene:** IPv6 off, DNS only through Tor, generic host identity, clock corrected over Tor
 - **Privacy applications included:** Tor Browser, KeePassXC, Kleopatra (OpenPGP), OnionShare, Electrum, Feather and SimpleX, all preset to use Tor
 - **Native arm64:** built for Apple Silicon, no emulation
 - **Pinned inputs:** the Debian installer, Tor Browser, Feather and SimpleX are pinned by hash; Debian packages are signed by Debian and every version in the image is recorded in `/usr/share/ombra/packages.txt`. Installing the two-VM archives downloads nothing; the single VM installer downloads Debian packages directly from Debian, not through Tor
@@ -50,7 +47,7 @@ How to install either: [docs/INSTALL.md](docs/INSTALL.md). The rest of this page
     <td width="50%"><img src="docs/images/login.png" alt="Login"><br><sub>Login</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/images/desktop.png" alt="Desktop"><br><sub>Desktop, Tor status LED green</sub></td>
+    <td width="50%"><img src="docs/images/desktop.png" alt="Desktop"><br><sub>Desktop, Tor status light green</sub></td>
     <td width="50%"><img src="docs/images/terminal-panel.png" alt="Connectivity panel"><br><sub>Connectivity panel</sub></td>
   </tr>
 </table>
@@ -76,7 +73,7 @@ Details: [docs/INSTALL.md](docs/INSTALL.md)
 | Requirement | Value |
 |---|---|
 | Host | Apple Silicon Mac with VMware Fusion or UTM 5.0.8+ |
-| Download | About 7.3 GB (both machines) |
+| Download | About 7.7 GB (both machines) |
 | Free disk | About 45 GB (5 GB gateway + 30 GB desktop, provisioned, plus the archives) |
 
 ## The two machines
@@ -98,38 +95,37 @@ Details: [docs/INSTALL.md](docs/INSTALL.md)
 
 ## Compared
 
-| | **Ombra** | Whonix | Tails |
+| | Ombra | Whonix | Tails |
 |---|:---|:---|:---|
-| **Design** | **Gateway VM + desktop VM** | Gateway VM + workstation VM | Single live OS |
-| **Network path** | **One NIC on a private link; the only route is the gateway** | Workstation reaches the network only through the gateway | One OS; Tor enforced by firewall rules |
-| **Desktop** | **KDE Plasma, themed, mouse-first** | Lightweight desktop; varies by release | GNOME |
-| **Base** | **Debian 13 (trixie)** | Debian | Debian 13 (trixie) |
-| **Apple Silicon** | **Yes, native arm64** | Not officially supported | No. x86-64 only |
-| **Amnesic mode** | **Your choice at every boot** | Partial. Optional (live mode) | Yes. Always |
-| **Disk encryption** | **LUKS2 on the desktop disk, inside the VM** | No. Not in its images; encrypt the host | Partial. Optional encrypted Persistent Storage |
-| **Runs on** | **VMware Fusion or UTM** | VirtualBox, KVM, Qubes | Bare hardware |
-| **Maturity** | **New, no independent audit** | Established | Established |
+| **Design** | Gateway VM + desktop VM, or one VM with the gateway as a container | Gateway VM + workstation VM | Single live OS |
+| **Network path** | One NIC on a private link; the only route is the gateway | Workstation reaches the network only through the gateway | One OS; Tor enforced by firewall rules |
+| **Desktop** | KDE Plasma | Lightweight desktop; varies by release | GNOME |
+| **Base** | Debian 13 (trixie) | Debian | Debian 13 (trixie) |
+| **Apple Silicon** | Yes, native arm64 | Not officially supported | No. x86-64 only |
+| **Amnesic mode** | Your choice at every boot | Partial. Optional (live mode) | Yes. Always |
+| **Disk encryption** | LUKS2 on the desktop disk, inside the VM | No. Not in its images; encrypt the host | Partial. Optional encrypted Persistent Storage |
+| **Runs on** | VMware Fusion or UTM | VirtualBox, KVM, Qubes | Bare hardware |
+| **Maturity** | New, no independent audit | Established | Established |
 
 ## Status
 
 - Apple Silicon with VMware Fusion or UTM only; there is no x86 build
 - Only the latest release is supported; earlier releases get no fixes and their images are not kept
-- Tor Browser is the stable channel for linux-aarch64 (16.0.1), a newer and smaller platform than the x86 desktop builds; v1.1.0 carried the alpha 16.0a14
+- Tor Browser comes from the stable channel for linux-aarch64, a newer and less widely used platform than Tor Browser's x86 builds
 - The single VM edition is tested on VMware Fusion only; under UTM it is untested
-- Debian security updates: user-started, from v1.2.0; v1.1.0 images do not have the action
 - No Tor bridges or pluggable transports: your network can see that you use Tor, and Ombra does not work where Tor is blocked
 - No independent security audit yet; read the [threat model](docs/THREAT_MODEL.md) before relying on it
 - Report vulnerabilities through [SECURITY.md](SECURITY.md)
 
 ## Build from source
 
-One guided command checks your Mac, installs missing tools, verifies the pinned downloads, builds, and creates both VMs (in a clone of this repository, `bash scripts/build.sh --edition single` builds the single VM installer ISO instead):
+One guided command checks your Mac, installs missing tools, verifies the pinned downloads, builds, and creates both VMs:
 
 ```sh
 curl -fsSL https://ombra-os.org/build.sh | bash
 ```
 
-Read the script first: [`scripts/build.sh`](scripts/build.sh). Manual route: [docs/INSTALL.md](docs/INSTALL.md).
+Read the script first: [`scripts/build.sh`](scripts/build.sh). To build the single VM installer ISO instead, run `bash scripts/build.sh --edition single` in a clone of this repository. Manual steps: [docs/INSTALL.md](docs/INSTALL.md).
 
 | Tool | Version |
 |---|---|
@@ -154,4 +150,4 @@ GPL-3.0-or-later. Copyright (C) 2026 Xen. See [LICENSE](LICENSE).
 
 ## Support Ombra
 
-Ombra is free to use. Every release is free to download, build and run, with no account and no payment. To support the project, see [ombra-os.org/support](https://ombra-os.org/support).
+Ombra is free to download, build and use, with no account. To support development, see [ombra-os.org/support](https://ombra-os.org/support).
