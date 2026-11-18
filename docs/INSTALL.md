@@ -423,12 +423,11 @@ bash build/fusion/create-desktop-vm.sh --verify --fix "$HOME/Virtual Machines.lo
   new image.
 - Only the latest release is supported; earlier releases get no fixes.
 - v1.0 installs have no updater and need a fresh download of both machines.
-- From v1.1.0 to v1.2.0 there is no in-place update: install both
-  machines from the v1.2.0 images, after copying your files out of the
-  old desktop. The new disk layout, kernel settings and VM settings need
-  new images, and a v1.1.0 gateway cannot run `ombra-update` (its image
-  lacks the sudo grants, and its console account has no password).
-  Releases after v1.2.0 update v1.2.0 machines in place.
+- From v1.1.0: the desktop updates to v1.2.0 in place with **Update
+  Ombra**; your files stay where they are. The gateway holds no user
+  data, so replace it with the v1.2.0 gateway image (download, unzip,
+  open, start): a fresh gateway is the recommended setup. A v1.2.0
+  desktop also works with a v1.1.0 gateway in the meantime.
 - The gateway's Amnesic mode starts every boot from the installed system,
   so it never carries an update itself: apply updates in Persistent mode.
 

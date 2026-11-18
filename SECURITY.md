@@ -10,7 +10,7 @@ Only the current release gets fixes.
 | Release | Supported |
 |---|---|
 | v1.2.0 (current) | Yes |
-| v1.1.0 | No: install v1.2.0 (there is no in-place update from v1.1.0); its images are not kept |
+| v1.1.0 | No: update the desktop with Update Ombra and replace the gateway with the v1.2.0 image; its images are not kept |
 | v1.0.0 | No: no fixes, and its images are not kept |
 | Later releases | The newest tag replaces v1.2.0 here; earlier ones stop being supported |
 

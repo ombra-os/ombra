@@ -26,7 +26,7 @@ Debian security updates:
 | Restart | Asked for when a kernel, initramfs, libc, systemd, udev, OpenSSL or Tor package changed, or `/run/reboot-required` exists. Otherwise programs pick the fixes up when reopened |
 | Afterwards | Package lists and downloaded packages are deleted again; images ship without them. Ombra updates wait until the rollback point is committed |
 | Scope | The packages of the machine it runs on. On the single VM edition that is the desktop only: the gateway container's image (Tor, dnsmasq, nftables) is fixed at install and changes only with an Ombra update for the `single` role that replaces it |
-| Availability | From v1.2.0. The v1.1.0 images do not have this action |
+| Availability | From v1.2.0, including v1.1.0 desktops updated to v1.2.0 |
 
 What an update does to your data:
 
