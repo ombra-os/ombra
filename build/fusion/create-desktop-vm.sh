@@ -1,13 +1,20 @@
 #!/bin/bash
 # desktop VM on VMware Fusion: derived from the proven gateway template (drop NIC2; 6GB/4vCPU; 30GB NVMe; 3D+sound on).
 # Install on NAT with pinned MAC 00:50:56:2a:00:10; the intnet swap afterwards is a host-side change. Disk stays persistent.
+# OMBRA_EDITION=single: the one-VM edition (gateway container inside), VM ombra-single from ombra-install-single.iso,
+# MAC 00:50:56:2a:00:20; its one NIC stays on NAT for good (the container owns it). Every other key is the desktop's.
 
 set -u
 
 APP="/Applications/VMware Fusion.app"
 VMRUN="$APP/Contents/Public/vmrun"
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-DESKTOP_ISO="${OMBRA_DESKTOP_ISO:-$REPO/build/disks/ombra-install-desktop.iso}"
+case "${OMBRA_EDITION:-two-vm}" in
+  two-vm) VM_NAME=ombra-desktop; VM_MAC=00:50:56:2a:00:10 ;;
+  single) VM_NAME=ombra-single;  VM_MAC=00:50:56:2a:00:20 ;;
+  *) echo "FATAL: OMBRA_EDITION must be two-vm or single (got '$OMBRA_EDITION')" >&2; exit 2 ;;
+esac
+DESKTOP_ISO="${OMBRA_DESKTOP_ISO:-$REPO/build/disks/ombra-install-${VM_NAME#ombra-}.iso}"
 VMDIR="$HOME/Virtual Machines.localized"
 
 # ---- preflight ------------------------------------------------------------
@@ -15,15 +22,15 @@ VMDIR="$HOME/Virtual Machines.localized"
 preflight() {
   [ -x "$VMRUN" ] || { echo "FATAL: vmrun not found at $VMRUN — install VMware Fusion" >&2; exit 1; }
   [ -f "$DESKTOP_ISO" ] || {
-      echo "FATAL: build/disks/ombra-install-desktop.iso missing — build it:" >&2
+      echo "FATAL: $DESKTOP_ISO missing — build it:" >&2
       echo "  stage the pinned netinst in build/isos/ (build/pins/debian-netinst-arm64.txt)," >&2
       echo "  verify it: build/verify-iso.sh" >&2
-      echo "  then:      build/make-install-iso.sh desktop" >&2
+      echo "  then:      build/make-install-iso.sh ${VM_NAME#ombra-}" >&2
       exit 1
   }
-  if [ -e "$VMDIR/ombra-desktop.vmwarevm" ]; then
-      echo "NOTE: $VMDIR/ombra-desktop.vmwarevm already exists (remove if stale):" >&2
-      echo "  rm -rf \"$VMDIR/ombra-desktop.vmwarevm\"" >&2
+  if [ -e "$VMDIR/$VM_NAME.vmwarevm" ]; then
+      echo "NOTE: $VMDIR/$VM_NAME.vmwarevm already exists (remove if stale):" >&2
+      echo "  rm -rf \"$VMDIR/$VM_NAME.vmwarevm\"" >&2
   fi
 }
 
@@ -68,11 +75,11 @@ PYEOF
 
 verify() {
   if [ -z "$VMX" ]; then
-      echo "locating a desktop vmx in $VMDIR ..."
-      VMX="$( "$VMDIR"/*.vmwarevm/*.vmx 2>/dev/null | head -1)"
+      echo "locating a $VM_NAME vmx in $VMDIR ..."
+      VMX="$(ls -1 "$VMDIR"/"$VM_NAME"*.vmwarevm/*.vmx 2>/dev/null | head -1)"
   fi
   if [ -z "$VMX" ] || [ ! -f "$VMX" ]; then
-      echo "FATAL: no ombra-desktop vmx found in $VMDIR — pass the vmx path" >&2
+      echo "FATAL: no $VM_NAME vmx found in $VMDIR — pass the vmx path" >&2
       exit 1
   fi
   echo "== verifying $VMX =="
@@ -81,11 +88,16 @@ verify() {
   check_eq "RAM"         memSize       6144 "$VMX" 6144
   check_eq "vCPUs"       numvcpus      4    "$VMX" 4
   check_eq "installer CD" sata0:0.fileName "$DESKTOP_ISO" "$VMX" ""
-  check_eq "NIC type (NAT for install)" ethernet0.connectionType nat "$VMX" nat
-  check_eq "NIC MAC (pinned desktop role)" ethernet0.address 00:50:56:2a:00:10 "$VMX" 00:50:56:2a:00:10
+  if [ "$VM_NAME" = ombra-single ]; then
+      check_eq "NIC type (NAT, for good: the gateway container's upstream)" ethernet0.connectionType nat "$VMX" nat
+  else
+      check_eq "NIC type (NAT for install)" ethernet0.connectionType nat "$VMX" nat
+  fi
+  check_eq "NIC MAC (pinned $VM_NAME role)" ethernet0.address "$VM_MAC" "$VMX" "$VM_MAC"
   check_eq "NIC addrType" ethernet0.addressType static "$VMX" static
   check_eq "time sync OFF (time.synchronize.* set stays whole; runtime time is ombra-timesync over Tor)" tools.syncTime FALSE "$VMX" FALSE
-  check_eq "3D ON (MKS/Metal; the session renders via software GL by policy)" mks.enable3d TRUE "$VMX" TRUE
+  check_eq "RTC is UTC (Fusion default is host local time: hours of skew and a timezone tell)" rtc.diffFromUTC 0 "$VMX" 0
+  check_eq "3D ON (MKS/Metal; KWin composites on the SVGA3D device)" mks.enable3d TRUE "$VMX" TRUE
   if vmx_get sound.present "$VMX" | grep -qi '^TRUE$'; then
       ok "sound card on (desktop keeps audio)"
   else
@@ -116,7 +128,11 @@ verify() {
 
   echo
   if [ "$FAILS" -gt 0 ]; then
-      echo "RESULT: $FAILS FAIL(S)${FIXMODE:+ remaining — device-tree items need the UI}"
+      if [ "$FIXMODE" = 1 ]; then
+          echo "RESULT: $FAILS FAIL(S) remaining — device-tree items need the UI"
+      else
+          echo "RESULT: $FAILS FAIL(S)"
+      fi
       exit 1
   fi
   echo "RESULT: all settings verified — boot it."
@@ -136,7 +152,7 @@ done
 preflight
 
 instantiate() {
-  BUNDLE="$VMDIR/ombra-desktop.vmwarevm"
+  BUNDLE="$VMDIR/$VM_NAME.vmwarevm"
   if [ -e "$BUNDLE" ]; then
       echo "FATAL: $BUNDLE exists — remove it first (if it is a dead attempt):" >&2
       echo "  rm -rf \"$BUNDLE\"" >&2
@@ -158,28 +174,29 @@ instantiate() {
       -e 's|^mks.enable3d = .*|mks.enable3d = "TRUE"|' \
       -e 's|^tools.syncTime = .*|tools.syncTime = "FALSE"|' \
       -e 's|^sound.present = .*|sound.present = "TRUE"|' \
-      -e 's|^ethernet0.address = .*|ethernet0.address = "00:50:56:2a:00:10"|' \
-      "$REPO/build/fusion/gateway-vm-template.vmx" > "$BUNDLE/ombra-desktop.vmx"
-  sed -i '' -e 's|^displayName = .*|displayName = "ombra-desktop"|' \
-      -e 's|^nvram = .*|nvram = "ombra-desktop.nvram"|' \
-      -e 's|^extendedConfigFile = .*|extendedConfigFile = "ombra-desktop.vmxf"|' \
-      "$BUNDLE/ombra-desktop.vmx"
+      -e "s|^ethernet0.address = .*|ethernet0.address = \"$VM_MAC\"|" \
+      "$REPO/build/fusion/gateway-vm-template.vmx" > "$BUNDLE/$VM_NAME.vmx"
+  sed -i '' -e "s|^displayName = .*|displayName = \"$VM_NAME\"|" \
+      -e "s|^nvram = .*|nvram = \"$VM_NAME.nvram\"|" \
+      -e "s|^extendedConfigFile = .*|extendedConfigFile = \"$VM_NAME.vmxf\"|" \
+      "$BUNDLE/$VM_NAME.vmx"
+  # TEST rule: a test ISO makes displayName = "ombra-desktop-TEST" (or "ombra-single-TEST"), which export refuses
   case "$DESKTOP_ISO" in
-    *-test.iso) sed -i '' -e 's|^displayName = .*|displayName = "ombra-desktop-TEST"|' "$BUNDLE/ombra-desktop.vmx" ;;
+    *-test.iso) sed -i '' -e "s|^displayName = .*|displayName = \"$VM_NAME-TEST\"|" "$BUNDLE/$VM_NAME.vmx" ;;
   esac
   # no display-mode pin: Fusion's default auto-fit is the product posture — sizing belongs to the user, not the image
   # OMBRA_INSTALL_VNC=1: local unauthenticated VNC for the test bench. NEVER set for shipped images — a debug channel.
   if [ "${OMBRA_INSTALL_VNC:-0}" = 1 ]; then
     printf 'RemoteDisplay.vnc.enabled = "TRUE"\nRemoteDisplay.vnc.port = "5977"\n' \
-      >> "$BUNDLE/ombra-desktop.vmx"
+      >> "$BUNDLE/$VM_NAME.vmx"
   fi
   # OMBRA_INSTALL_SERIAL=1: file-backed serial log of the installer's phase timings (build VMs only; post-install strips it).
   if [ "${OMBRA_INSTALL_SERIAL:-0}" = 1 ]; then
-    rm -f "/tmp/ombra-install-desktop.log"
-    printf 'serial0.present = "TRUE"\nserial0.fileType = "file"\nserial0.fileName = "/tmp/ombra-install-desktop.log"\n' \
-      >> "$BUNDLE/ombra-desktop.vmx"
+    rm -f "/tmp/ombra-install-${VM_NAME#ombra-}.log"
+    printf 'serial0.present = "TRUE"\nserial0.fileType = "file"\nserial0.fileName = "/tmp/ombra-install-%s.log"\n' "${VM_NAME#ombra-}" \
+      >> "$BUNDLE/$VM_NAME.vmx"
   fi
-  echo "instantiated $BUNDLE (6GB/4vCPU/30GB NVMe, 3D+sound on, MAC 00:50:56:2a:00:10, NAT for install)"
+  echo "instantiated $BUNDLE (6GB/4vCPU/30GB NVMe, 3D+sound on, MAC $VM_MAC, NAT for install)"
 }
 
 if [ "$VERIFY" = 1 ]; then
@@ -199,12 +216,32 @@ else
   echo
   echo "== booting installer =="
   if [ "${OMBRA_START_NOGUI:-0}" = 1 ]; then
-    "$VMRUN" -T fusion start "$VMDIR/ombra-desktop.vmwarevm/ombra-desktop.vmx" nogui \
+    "$VMRUN" -T fusion start "$VMDIR/$VM_NAME.vmwarevm/$VM_NAME.vmx" nogui \
         || echo "(vmrun start failed — open the VM in Fusion and press Play)"
   else
     open -a "VMware Fusion"
-    "$VMRUN" -T fusion start "$VMDIR/ombra-desktop.vmwarevm/ombra-desktop.vmx" \
+    "$VMRUN" -T fusion start "$VMDIR/$VM_NAME.vmwarevm/$VM_NAME.vmx" \
         || echo "(vmrun start failed — open the VM in Fusion and press Play)"
+  fi
+  if [ "$VM_NAME" = ombra-single ]; then
+    cat <<'RB'
+
+== single-edition install runbook ==
+- TEST ISO (ombra-install-single-test.iso): unattended, ~15-30 min (it also
+  builds the gateway container); the disk passphrase is
+  OMBRA_TEST_DISK_PASSPHRASE (default ombra-test-disk), the password the
+  test password, and the VM POWERS OFF when done.
+- Plain ISO (the end user's): the installer asks the disk passphrase and the
+  account password (twice each), then installs and REBOOTS into the system.
+- A failed install parks on a visible console instead of finishing.
+- After the TEST install powers off, run:
+  OMBRA_EDITION=single bash build/fusion/post-install-desktop.sh
+  (keeps the NIC on NAT, detaches the installer CD, disk-first boot,
+  starts the VM). No gateway VM is needed.
+- Every boot: the unlock screen asks the disk passphrase; there is no
+  first-use screen in this edition.
+RB
+    exit 0
   fi
   cat <<'RB'
 

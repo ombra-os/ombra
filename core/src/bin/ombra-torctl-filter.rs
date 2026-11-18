@@ -1,16 +1,23 @@
 //! Control-port bouncer: forwards only the read-only dialect (crate::torctl);
 //! no client-supplied byte is ever logged; pre-auth clients are timed out and the session count is capped.
 
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ombra_boot::torctl;
+
+const CLIENT_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Tor answers its own AUTHENTICATE at once; a silent upstream must not hold the session.
+const UPSTREAM_AUTH_TIMEOUT: Duration = Duration::from_secs(5);
+/// Back-off after a failed accept (fd exhaustion), so the loop never spins.
+const ACCEPT_RETRY: Duration = Duration::from_millis(100);
 
 const USAGE: &str = "\
 usage: ombra-torctl-filter [--listen ADDR:PORT] [--upstream ADDR:PORT]
@@ -35,6 +42,8 @@ struct Config {
 #[derive(Clone, Copy)]
 struct Limits {
     auth_timeout: Duration,
+    /// a client that stops reading is cut off after this long instead of wedging the session's one writer
+    write_timeout: Duration,
     idle_timeout: Option<Duration>,
     line_cap: usize,
     max_connections: usize,
@@ -44,6 +53,7 @@ impl Limits {
     fn production() -> Self {
         Limits {
             auth_timeout: Duration::from_secs(torctl::AUTH_TIMEOUT_SECS),
+            write_timeout: CLIENT_WRITE_TIMEOUT,
             idle_timeout: None,
             line_cap: torctl::MAX_LINE_BYTES,
             max_connections: torctl::MAX_CONNECTIONS,
@@ -96,7 +106,7 @@ fn main() -> ExitCode {
     };
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
-        let mut val = || args.next().unwrap_or_else(|| die(&USAGE));
+        let mut val = || args.next().unwrap_or_else(|| die(USAGE));
         match arg.as_str() {
             "--listen" => cfg.listen = val(),
             "--upstream" => cfg.upstream = val(),
@@ -119,8 +129,11 @@ fn main() -> ExitCode {
         cfg.listen, cfg.upstream
     );
     let pool = Arc::new(ConnectionPool::default());
-    for stream in listener.incoming().flatten() {
-        handle_incoming(&pool, stream, &cfg, Limits::production());
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => handle_incoming(&pool, stream, &cfg, Limits::production()),
+            Err(_) => thread::sleep(ACCEPT_RETRY),
+        }
     }
     ExitCode::SUCCESS
 }
@@ -150,10 +163,16 @@ fn handle_incoming(pool: &Arc<ConnectionPool>, stream: TcpStream, cfg: &Config, 
         cookie_file: cfg.cookie_file.clone(),
         client_cookie_hex: cfg.client_cookie_hex.clone(),
     };
-    thread::spawn(move || {
-        let _session = session;
-        serve(stream, &cfg, &limits);
-    });
+    // a failed spawn drops the closure, and with it the stream and the session's slot
+    let spawned = thread::Builder::new()
+        .name("torctl-session".into())
+        .spawn(move || {
+            let _session = session;
+            serve(stream, &cfg, &limits);
+        });
+    if spawned.is_err() {
+        eprintln!("ombra-torctl-filter: connection dropped: cannot spawn a session thread");
+    }
 }
 
 /// One connection: client handshake, upstream cookie auth, then filter client lines up and pass upstream bytes down raw.
@@ -165,8 +184,16 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
     let peer_ip = client.peer_addr().map(|a| a.ip()).ok();
     let mut client = client;
     let _ = client.set_nodelay(true);
-    // pre-auth reads are bounded; the session lifts the bound once the cookie lands
+    // pre-auth is one total deadline, not per read: refused lines cannot keep a slot alive
+    let auth_deadline = Instant::now() + limits.auth_timeout;
     let _ = client.set_read_timeout(Some(limits.auth_timeout));
+    // set before any clone, so every handle to the client shares it
+    if client
+        .set_write_timeout(Some(limits.write_timeout))
+        .is_err()
+    {
+        return;
+    }
 
     let upstream = match TcpStream::connect(&cfg.upstream) {
         Ok(s) => s,
@@ -192,8 +219,12 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
 
     let mut reader = BufReader::new(try_clone(&client));
     let mut line: Vec<u8> = Vec::new();
-    // break = authenticated; return = client gone, stalled, or failed the cookie
+    // break = authenticated; return = client gone, stalled, out of time, or failed the cookie
     loop {
+        let left = auth_deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() || client.set_read_timeout(Some(left)).is_err() {
+            return;
+        }
         match torctl::read_line_capped(&mut reader, &mut line, limits.line_cap) {
             Err(torctl::LineReadError::TooLong) => {
                 return refuse_close(client, "510 ombra-filter: line too long");
@@ -215,12 +246,19 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
                 return;
             }
             "PROTOCOLINFO" => {
-                let _ = client.write_all(torctl::PROTOCOLINFO_REPLY.as_bytes());
+                if client
+                    .write_all(torctl::PROTOCOLINFO_REPLY.as_bytes())
+                    .is_err()
+                {
+                    return;
+                }
             }
             "AUTHENTICATE" => {
                 if torctl::client_auth_ok(cmd) {
                     // the client never learns the upstream cookie; this 250 is ours, not tor's
-                    let _ = client.write_all(b"250 OK\r\n");
+                    if client.write_all(b"250 OK\r\n").is_err() {
+                        return;
+                    }
                     eprintln!("ombra-torctl-filter: {peer} authenticated");
                     break;
                 }
@@ -229,37 +267,57 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
                 return;
             }
             _ => {
-                let _ = client.write_all(format!("{}\r\n", torctl::refusal(cmd, false)).as_bytes());
+                let refused = format!("{}\r\n", torctl::refusal(cmd, false));
                 eprintln!("ombra-torctl-filter: {peer} command refused");
+                if client.write_all(refused.as_bytes()).is_err() {
+                    return;
+                }
             }
         }
     }
 
     let _ = client.set_read_timeout(limits.idle_timeout);
     let mut onion_adds: u32 = 0;
-    let to_client = try_clone(&client);
-    thread::spawn(move || {
-        let mut inp = BufReader::new(try_clone(&upstream));
-        let mut out = to_client;
-        let mut filter = torctl::DownstreamFilter::new();
-        let mut buf = [0u8; 4096];
-        loop {
-            match inp.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    let pass = filter.feed(&buf[..n]);
-                    if !pass.is_empty() && out.write_all(&pass).is_err() {
-                        break;
+    let out = Arc::new(Mutex::new(ClientOut {
+        stream: try_clone(&client),
+        pending: VecDeque::new(),
+    }));
+    let downstream = {
+        let out = Arc::clone(&out);
+        let upstream = try_clone(&upstream);
+        thread::Builder::new()
+            .name("torctl-down".into())
+            .spawn(move || {
+                let mut inp = BufReader::new(upstream);
+                let mut filter = torctl::DownstreamFilter::new();
+                let mut buf = [0u8; 4096];
+                loop {
+                    match inp.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            let lines = filter.feed_lines(&buf[..n]);
+                            if !lines.is_empty() && out_lock(&out).deliver(lines).is_err() {
+                                break;
+                            }
+                        }
                     }
                 }
-            }
-        }
-    });
+                let _ = out_lock(&out).stream.shutdown(std::net::Shutdown::Both);
+            })
+    };
+    let Ok(downstream) = downstream else {
+        eprintln!("ombra-torctl-filter: {peer} dropped: cannot spawn the reply thread");
+        let _ = upstream_writer.shutdown(std::net::Shutdown::Both);
+        let _ = client.shutdown(std::net::Shutdown::Both);
+        return;
+    };
 
+    // every line is answered in order: forwarded lines by tor, the rest locally, queued behind earlier forwards
+    let mut quit = false;
     loop {
         match torctl::read_line_capped(&mut reader, &mut line, limits.line_cap) {
             Err(torctl::LineReadError::TooLong) => {
-                let _ = client.write_all(b"510 ombra-filter: line too long\r\n");
+                let _ = out_lock(&out).local(b"510 ombra-filter: line too long\r\n");
                 eprintln!("ombra-torctl-filter: {peer} refused: line too long");
                 break;
             }
@@ -274,74 +332,116 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
             continue;
         }
         let (verb, rest) = verb_split(cmd);
-        if verb == "ADD_ONION" {
+        let forward: Option<String> = if verb == "ADD_ONION" {
             let rewritten = peer_ip
                 .filter(|_| onion_adds < torctl::MAX_ADD_ONION)
                 .and_then(|ip| torctl::add_onion_rewrite(rest, ip));
-            let Some(forward) = rewritten else {
-                let _ = client.write_all(format!("{}\r\n", torctl::refusal(cmd, true)).as_bytes());
-                eprintln!("ombra-torctl-filter: {peer} ADD_ONION refused");
-                continue;
-            };
-            onion_adds += 1;
-            eprintln!("ombra-torctl-filter: {peer} ADD_ONION accepted");
-            if upstream_writer
-                .write_all(format!("{forward}\r\n").as_bytes())
-                .is_err()
-            {
-                break;
-            }
-            continue;
-        }
-        if verb == "SETEVENTS" {
-            match torctl::setevents_plan(rest) {
-                Some(None) => {
-                    if client.write_all(b"250 OK\r\n").is_err() {
-                        break;
-                    }
-                }
-                Some(Some(forward)) => {
-                    if upstream_writer
-                        .write_all(format!("{forward}\r\n").as_bytes())
-                        .is_err()
-                    {
-                        break;
-                    }
+            match rewritten {
+                Some(f) => {
+                    onion_adds += 1;
+                    eprintln!("ombra-torctl-filter: {peer} ADD_ONION accepted");
+                    Some(f)
                 }
                 None => {
-                    let _ =
-                        client.write_all(format!("{}\r\n", torctl::refusal(cmd, true)).as_bytes());
+                    eprintln!("ombra-torctl-filter: {peer} ADD_ONION refused");
+                    None
+                }
+            }
+        } else if verb == "SETEVENTS" {
+            // always forwarded, possibly bare: tor replaces its whole set, so an old subscription never lingers
+            match torctl::setevents_plan(rest) {
+                Some(f) => Some(f),
+                None => {
                     eprintln!(
                         "ombra-torctl-filter: {peer} command refused: {}",
                         torctl::loggable(cmd)
                     );
+                    None
                 }
             }
-            continue;
-        }
-        if let Some(reply) = torctl::stub_reply(cmd, true) {
-            if client.write_all(reply.as_bytes()).is_err() {
+        } else if let Some(reply) = torctl::stub_reply(cmd, true) {
+            if out_lock(&out).local(reply.as_bytes()).is_err() {
                 break;
             }
             continue;
-        }
-        if !torctl::command_allowed(cmd, true) {
-            let _ = client.write_all(format!("{}\r\n", torctl::refusal(cmd, true)).as_bytes());
+        } else if torctl::command_allowed(cmd, true) {
+            Some(cmd.to_string())
+        } else {
             eprintln!(
                 "ombra-torctl-filter: {peer} command refused: {}",
                 torctl::loggable(cmd)
             );
+            None
+        };
+        let Some(forward) = forward else {
+            let refusal = format!("{}\r\n", torctl::refusal(cmd, true));
+            if out_lock(&out).local(refusal.as_bytes()).is_err() {
+                break;
+            }
             continue;
-        }
-        if upstream_writer.write_all(&line).is_err() {
+        };
+        // the slot is reserved before the bytes leave, so the reply can never overtake it
+        out_lock(&out).expect_upstream();
+        if upstream_writer
+            .write_all(format!("{forward}\r\n").as_bytes())
+            .is_err()
+        {
             break;
         }
         if verb == "QUIT" {
+            quit = true;
             break;
         }
     }
-    let _ = upstream_writer.shutdown(std::net::Shutdown::Both);
+    if quit {
+        // tor answers QUIT and closes; the downstream thread delivers that answer, then closes the client
+        let _ = upstream_writer.shutdown(std::net::Shutdown::Write);
+    } else {
+        let _ = upstream_writer.shutdown(std::net::Shutdown::Both);
+    }
+    let _ = downstream.join();
     let _ = client.shutdown(std::net::Shutdown::Both);
+}
+
+/// The one writer to the client. `pending` holds, in command order, `None` for a line tor still has to answer
+/// and `Some(bytes)` for a local answer that must wait behind it.
+struct ClientOut {
+    stream: TcpStream,
+    pending: VecDeque<Option<Vec<u8>>>,
+}
+
+impl ClientOut {
+    fn expect_upstream(&mut self) {
+        self.pending.push_back(None);
+    }
+
+    fn local(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        if self.pending.is_empty() {
+            self.stream.write_all(bytes)
+        } else {
+            self.pending.push_back(Some(bytes.to_vec()));
+            Ok(())
+        }
+    }
+
+    fn deliver(&mut self, lines: Vec<torctl::DownLine>) -> std::io::Result<()> {
+        for l in lines {
+            self.stream.write_all(&l.bytes)?;
+            if l.ends_reply && matches!(self.pending.front(), Some(None)) {
+                self.pending.pop_front();
+                while let Some(Some(_)) = self.pending.front() {
+                    if let Some(Some(bytes)) = self.pending.pop_front() {
+                        self.stream.write_all(&bytes)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn out_lock(out: &Mutex<ClientOut>) -> std::sync::MutexGuard<'_, ClientOut> {
+    out.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 fn verb_split(line: &str) -> (&str, &str) {
@@ -351,8 +451,11 @@ fn verb_split(line: &str) -> (&str, &str) {
     }
 }
 
-/// Authenticate to tor upstream with the real control cookie.
+/// Authenticate to tor upstream with the real control cookie; the read is bounded, then unbounded again for the session.
 fn upstream_auth(upstream: &TcpStream, cookie_hex: &str) -> Result<(), String> {
+    upstream
+        .set_read_timeout(Some(UPSTREAM_AUTH_TIMEOUT))
+        .map_err(|e| e.to_string())?;
     let mut w = try_clone(upstream);
     w.write_all(format!("AUTHENTICATE {cookie_hex}\r\n").as_bytes())
         .map_err(|e| e.to_string())?;
@@ -360,6 +463,8 @@ fn upstream_auth(upstream: &TcpStream, cookie_hex: &str) -> Result<(), String> {
     let mut r = BufReader::new(try_clone(upstream));
     let mut reply = String::new();
     r.read_line(&mut reply).map_err(|e| e.to_string())?;
+    // the session's reply thread blocks on upstream for as long as tor stays up
+    upstream.set_read_timeout(None).map_err(|e| e.to_string())?;
     if reply.starts_with("250") {
         Ok(())
     } else {
@@ -578,6 +683,162 @@ mod tests {
             first.read(&mut one).is_err(),
             "the admitted session must survive the cap refusal"
         );
+        std::fs::remove_file(cookie).ok();
+    }
+
+    /// Stand-in control port that answers like tor: auth, a slow GETINFO, and QUIT that closes.
+    fn spawn_slow_upstream() -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut w = stream;
+                    let mut line = String::new();
+                    while reader.read_line(&mut line).is_ok_and(|n| n > 0) {
+                        let reply: &[u8] = if line.starts_with("AUTHENTICATE") {
+                            b"250 OK\r\n"
+                        } else if line.starts_with("GETINFO") {
+                            thread::sleep(Duration::from_millis(300));
+                            b"250-version=0.4.9.0\r\n250 OK\r\n"
+                        } else if line == "SETEVENTS\r\n" {
+                            b"250 OK\r\n"
+                        } else if line == "SETEVENTS HS_DESC\r\n" {
+                            b"250 OK HS_DESC\r\n"
+                        } else if line.starts_with("QUIT") {
+                            let _ = w.write_all(b"250 closing connection\r\n");
+                            return;
+                        } else {
+                            b"510 unexpected\r\n"
+                        };
+                        let _ = w.write_all(reply);
+                        line.clear();
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    #[test]
+    fn local_answers_wait_behind_earlier_forwarded_commands() {
+        let (cfg, cookie) = test_cfg(spawn_slow_upstream());
+        let addr = spawn_filtered_listener(cfg, Limits::production());
+        let mut c = TcpStream::connect(addr).unwrap();
+        c.write_all(
+            b"AUTHENTICATE\r\nGETINFO version\r\nSETEVENTS CIRC\r\nSIGNAL NEWNYM\r\nQUIT\r\n",
+        )
+        .unwrap();
+        let got = String::from_utf8(read_all(&mut c)).unwrap();
+        assert_eq!(
+            got,
+            "250 OK\r\n250-version=0.4.9.0\r\n250 OK\r\n250 OK\r\n510 ombra-filter: command not in the read-only dialect\r\n250 closing connection\r\n"
+        );
+        std::fs::remove_file(cookie).ok();
+    }
+
+    #[test]
+    fn every_setevents_reaches_tor_so_its_set_is_replaced() {
+        let (cfg, cookie) = test_cfg(spawn_slow_upstream());
+        let addr = spawn_filtered_listener(cfg, Limits::production());
+        let mut c = TcpStream::connect(addr).unwrap();
+        c.write_all(
+            b"AUTHENTICATE\r\nGETINFO version\r\nSETEVENTS CIRC HS_DESC\r\nSETEVENTS ORCONN\r\nSETEVENTS SIGNAL CONF_CHANGED\r\nSETEVENTS\r\nQUIT\r\n",
+        )
+        .unwrap();
+        let got = String::from_utf8(read_all(&mut c)).unwrap();
+        // the stub-only and bare lines go up bare; the refused one is answered locally, in order
+        assert_eq!(
+            got,
+            "250 OK\r\n250-version=0.4.9.0\r\n250 OK\r\n250 OK HS_DESC\r\n510 ombra-filter: command not in the read-only dialect\r\n250 OK\r\n250 OK\r\n250 closing connection\r\n"
+        );
+        std::fs::remove_file(cookie).ok();
+    }
+
+    #[test]
+    fn refused_lines_cannot_stretch_the_pre_auth_deadline() {
+        let (cfg, cookie) = test_cfg(spawn_fake_upstream());
+        let limits = Limits {
+            auth_timeout: Duration::from_millis(500),
+            ..Limits::production()
+        };
+        let addr = spawn_filtered_listener(cfg, limits);
+        let mut c = TcpStream::connect(addr).unwrap();
+        let mut w = c.try_clone().unwrap();
+        thread::spawn(move || {
+            for _ in 0..40 {
+                if w.write_all(b"GETINFO version\r\n").is_err() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let start = Instant::now();
+        let reply = read_all(&mut c);
+        let elapsed = start.elapsed();
+        assert!(contains(&reply, b"authenticate first"));
+        assert!(
+            elapsed < Duration::from_millis(2500),
+            "a chatty pre-auth client outlived the deadline: {elapsed:?}"
+        );
+        std::fs::remove_file(cookie).ok();
+    }
+
+    #[test]
+    fn a_client_that_never_reads_is_cut_off_and_frees_its_slot() {
+        let (cfg, cookie) = test_cfg(spawn_fake_upstream());
+        let limits = Limits {
+            write_timeout: Duration::from_millis(200),
+            max_connections: 1,
+            ..Limits::production()
+        };
+        let addr = spawn_filtered_listener(cfg, limits);
+        let stuck = TcpStream::connect(addr).unwrap();
+        let mut w = stuck.try_clone().unwrap();
+        // every PROTOCOLINFO is answered locally (and not logged); never reading them fills the socket buffers
+        let writer = thread::spawn(move || {
+            let _ = w.write_all(b"AUTHENTICATE\r\n");
+            let burst = b"PROTOCOLINFO\r\n".repeat(4096);
+            let start = Instant::now();
+            while start.elapsed() < Duration::from_secs(20) {
+                if w.write_all(&burst).is_err() {
+                    return true;
+                }
+            }
+            false
+        });
+        assert!(writer.join().unwrap(), "the stuck session was never closed");
+        let start = Instant::now();
+        loop {
+            let mut next = TcpStream::connect(addr).unwrap();
+            next.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let _ = next.write_all(b"AUTHENTICATE\r\n");
+            let mut buf = [0u8; 64];
+            let n = next.read(&mut buf).unwrap_or(0);
+            if contains(&buf[..n], b"250") {
+                break;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "slot was not freed: {:?}",
+                String::from_utf8_lossy(&buf[..n])
+            );
+            thread::sleep(Duration::from_millis(100));
+        }
+        drop(stuck);
+        std::fs::remove_file(cookie).ok();
+    }
+
+    #[test]
+    fn a_repeat_authenticate_is_answered_locally() {
+        let (cfg, cookie) = test_cfg(spawn_slow_upstream());
+        let addr = spawn_filtered_listener(cfg, Limits::production());
+        let mut c = TcpStream::connect(addr).unwrap();
+        c.write_all(b"AUTHENTICATE\r\nAUTHENTICATE \"x\"\r\nQUIT\r\n")
+            .unwrap();
+        let got = String::from_utf8(read_all(&mut c)).unwrap();
+        assert_eq!(got, "250 OK\r\n250 OK\r\n250 closing connection\r\n");
         std::fs::remove_file(cookie).ok();
     }
 }

@@ -40,6 +40,8 @@ PlasmoidItem {
 
     // update notice (tooltip only): the root-owned boot-time check writes "available" and the version to /run/ombra/update
     property string updateVersion: ""
+    // "invalid": the index failed its signature check (nothing installed); said in the tooltip
+    property bool updateInvalid: false
     readonly property string updateCommand: "/usr/bin/head -n 2 /run/ombra/update"
 
     // dot size from gridUnit — FontMetrics.height can arrive NaN at
@@ -51,16 +53,26 @@ PlasmoidItem {
     switchHeight: Kirigami.Units.gridUnit * 8
 
     toolTipMainText: "Ombra Tor Status"
-    toolTipSubText: root.updateVersion !== ""
+    toolTipSubText: root.updateInvalid
+        ? root.statusText + "\nWarning: the update list failed its signature check. Nothing was installed. Open Update Ombra for details."
+        : root.updateVersion !== ""
         ? root.statusText + "\nOmbra " + root.updateVersion + " is available. Open Update Ombra from the application menu."
         : root.statusText
+
+    Timer {
+        id: warmup
+
+        interval: 120000
+        running: true
+    }
 
     P5Support.DataSource {
         id: statusSource
 
         engine: "executable"
-        // one tick behind the daemon's 30 s cache TTL; reads the cache every 2 s until the first all-clear
-        interval: root.dotColor === root.stateColors["ok"] ? 31000 : 2000
+        // one tick behind the daemon's 30 s cache TTL; reads the cache every 2 s until the first all-clear,
+        // easing to 10 s once the daemon's own two-minute warm-up is over (a gateway that stays down is not polled hard)
+        interval: root.dotColor === root.stateColors["ok"] ? 31000 : (warmup.running ? 2000 : 10000)
         connectedSources: [root.statusCommand]
         onNewData: (source, data) => {
             root.ingest(data["stdout"]);
@@ -78,6 +90,7 @@ PlasmoidItem {
             const ver = (lines.length > 1 ? lines[1] : "").trim();
             // only a plain version string is ever shown
             root.updateVersion = (lines[0].trim() === "available" && /^[0-9][0-9A-Za-z.+~-]{0,30}$/.test(ver)) ? ver : "";
+            root.updateInvalid = lines[0].trim() === "invalid";
         }
     }
 
@@ -111,17 +124,51 @@ PlasmoidItem {
         };
     }
 
+    // the bar item: the dot with a soft halo, and the word "Tor" so the light explains itself
     compactRepresentation: Component {
         Item {
-            implicitWidth: root.dotSize + Math.round(root.dotSize / 2)
-            implicitHeight: root.dotSize
+            implicitWidth: row.implicitWidth + Kirigami.Units.smallSpacing * 2
+            implicitHeight: Math.max(root.dotSize, label.implicitHeight)
 
-            Rectangle {
+            MouseArea {
+                anchors.fill: parent
+                onClicked: root.expanded = !root.expanded
+            }
+
+            RowLayout {
+                id: row
                 anchors.centerIn: parent
-                width: root.dotSize
-                height: width
-                radius: width / 2
-                color: root.dotColor
+                spacing: Math.round(root.dotSize * 0.6)
+
+                Item {
+                    Layout.preferredWidth: root.dotSize
+                    Layout.preferredHeight: root.dotSize
+
+                    Rectangle {
+                        anchors.centerIn: parent
+                        width: root.dotSize * 2
+                        height: width
+                        radius: width / 2
+                        color: root.dotColor
+                        opacity: root.dotColor === root.stateColors["ok"] ? 0.18 : 0
+                    }
+
+                    Rectangle {
+                        anchors.centerIn: parent
+                        width: root.dotSize
+                        height: width
+                        radius: width / 2
+                        color: root.dotColor
+                    }
+                }
+
+                PC3.Label {
+                    id: label
+                    text: "Tor"
+                    font.weight: Font.DemiBold
+                    color: "#f4f3ef"
+                    opacity: root.dotColor === root.stateColors["ok"] ? 0.9 : 0.65
+                }
             }
         }
     }

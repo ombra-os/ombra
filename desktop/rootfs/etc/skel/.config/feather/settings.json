@@ -7,5 +7,6 @@
     "socks5Port": "9050",
     "torPrivacyLevel": 2,
     "useLocalTor": true,
-    "useOnionNodes": true
+    "useOnionNodes": true,
+    "skin": "Breeze/Dark"
 }

@@ -60,5 +60,5 @@ var desktopsArray = desktopsForActivity(currentActivity());
 for (var j = 0; j < desktopsArray.length; j++) {
     desktopsArray[j].wallpaperPlugin = "org.kde.image";
     desktopsArray[j].currentConfigGroup = ["Wallpaper", "org.kde.image", "General"];
-    desktopsArray[j].writeConfig("Image", "/usr/share/backgrounds/ombra/ombra-02-4k.png");
+    desktopsArray[j].writeConfig("Image", "/usr/share/backgrounds/ombra/ombra-ink-4k.jpg");
 }

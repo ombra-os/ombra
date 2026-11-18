@@ -22,15 +22,29 @@ body:
     id: source
     attributes:
       label: How was it installed
-      options: [Release image (.vmwarevm), Built from source]
+      options: [Release image for VMware Fusion (.vmwarevm), Release image for UTM (.utm), Built from source]
+    validations:
+      required: true
+  - type: dropdown
+    id: hypervisor
+    attributes:
+      label: Hypervisor
+      options: [VMware Fusion, UTM]
+    validations:
+      required: true
+  - type: input
+    id: hypervisor-version
+    attributes:
+      label: VMware Fusion or UTM version
     validations:
       required: true
   - type: input
     id: host
     attributes:
-      label: Mac model, macOS and VMware Fusion versions
+      label: Mac chip family and macOS major version
+      description: For example "M2, macOS 15". The model family is enough; leave out serial numbers and exact models.
     validations:
-      required: true
+      required: false
   - type: dropdown
     id: mode
     attributes:

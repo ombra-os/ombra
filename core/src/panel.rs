@@ -479,9 +479,11 @@ pub fn enter(w: &mut dyn io::Write) -> io::Result<()> {
     w.flush()
 }
 
-/// Cursor visible, nothing erased — the last frame stays.
+/// Cursor visible, nothing erased — the last frame stays. The cursor moves to a fresh line, or the shell marks
+/// the unterminated last row with its `%` end-of-line sign.
 pub fn restore(w: &mut dyn io::Write) -> io::Result<()> {
     w.execute(Show)?;
+    w.write_all(b"\r\n")?;
     w.flush()
 }
 
@@ -946,5 +948,12 @@ mod tests {
             1,
             "cleared once, on entry only"
         );
+    }
+
+    #[test]
+    fn restore_leaves_the_cursor_on_a_fresh_line() {
+        let mut out: Vec<u8> = Vec::new();
+        restore(&mut out).unwrap();
+        assert!(out.ends_with(b"\r\n"));
     }
 }

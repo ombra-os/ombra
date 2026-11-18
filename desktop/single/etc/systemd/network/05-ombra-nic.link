@@ -1,0 +1,5 @@
+[Match]
+Driver=vmxnet3 e1000e virtio_net
+
+[Link]
+Name=ombra-nic

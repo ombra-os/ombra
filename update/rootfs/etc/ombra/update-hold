@@ -1,0 +1,3 @@
+# Debian packages `ombra-update security` must never change, one name per line (# starts a comment).
+# If Debian's pending updates touch one, the whole run is refused and nothing changes: such a package then
+# reaches users only inside an Ombra release.

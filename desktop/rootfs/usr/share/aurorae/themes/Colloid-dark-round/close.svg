@@ -92,7 +92,7 @@
        y="0"
        x="0" />
     <circle
-       style="fill:#fd5f51;fill-opacity:1;stroke-width:8;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
+       style="fill:#3a3e52;fill-opacity:1;stroke-width:8;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
        id="active-center"
        cx="-27.733339"
        cy="1111.853"
@@ -109,21 +109,21 @@
        id="hover-center"
        transform="translate(123.31733,23.039191)">
       <circle
-         style="fill:#fd5f51;fill-opacity:1;stroke-width:8;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
+         style="fill:#f0716b;fill-opacity:1;stroke-width:8;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
          id="circle2545"
          cx="-111.05067"
          cy="1088.8138"
          r="8" />
       <path
          d="m -114.58592,1084.7787 c -0.12775,0 -0.2555,0.049 -0.35339,0.1465 -0.19578,0.1959 -0.19578,0.5112 0,0.707 l 3.1816,3.1816 -3.1816,3.1816 c -0.19578,0.1959 -0.19578,0.5112 0,0.7071 0.19578,0.1958 0.51118,0.1958 0.70704,0 l 3.1816,-3.1816 3.1816,3.1816 c 0.19578,0.1958 0.51114,0.1958 0.70704,0 0.19578,-0.1959 0.19578,-0.5112 0,-0.7071 l -3.1816,-3.1816 3.1816,-3.1816 c 0.19578,-0.1958 0.19578,-0.5111 0,-0.707 -0.19578,-0.1959 -0.51118,-0.1959 -0.70704,0 l -3.1816,3.1816 -3.1816,-3.1816 c -0.0979,-0.098 -0.22564,-0.1465 -0.35339,-0.1465 z"
-         style="fill:#ffffff;paint-order:stroke fill markers"
+         style="fill:#0b0c11;paint-order:stroke fill markers"
          id="path2869" />
     </g>
     <g
        id="pressed-center"
        transform="translate(123.31733,23.039191)">
       <circle
-         style="fill:#fd5f51;fill-opacity:1;stroke-width:8;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
+         style="fill:#f0716b;fill-opacity:1;stroke-width:8;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
          id="circle2547"
          cx="-71.050667"
          cy="1088.8138"
@@ -136,7 +136,7 @@
          r="8" />
       <path
          d="m -74.58593,1084.7787 c -0.12775,0 -0.2555,0.049 -0.35339,0.1465 -0.19578,0.1959 -0.19578,0.5112 0,0.707 l 3.1816,3.1816 -3.1816,3.1816 c -0.19578,0.1959 -0.19578,0.5112 0,0.7071 0.19578,0.1958 0.51118,0.1958 0.70704,0 l 3.18161,-3.1816 3.1816,3.1816 c 0.19578,0.1958 0.51114,0.1958 0.70704,0 0.19578,-0.1959 0.19578,-0.5112 0,-0.7071 l -3.1816,-3.1816 3.1816,-3.1816 c 0.19578,-0.1958 0.19578,-0.5111 0,-0.707 -0.19578,-0.1959 -0.51117,-0.1959 -0.70704,0 l -3.1816,3.1816 -3.18161,-3.1816 c -0.0979,-0.098 -0.22564,-0.1465 -0.35339,-0.1465 z"
-         style="fill:#ffffff;paint-order:stroke fill markers"
+         style="fill:#0b0c11;paint-order:stroke fill markers"
          id="path2928" />
     </g>
     <g
@@ -152,7 +152,7 @@
          style="opacity:0.3" />
       <path
          d="m -114.58592,1084.7787 c -0.12775,0 -0.2555,0.049 -0.35339,0.1465 -0.19578,0.1959 -0.19578,0.5112 0,0.707 l 3.1816,3.1816 -3.1816,3.1816 c -0.19578,0.1959 -0.19578,0.5112 0,0.7071 0.19578,0.1958 0.51118,0.1958 0.70704,0 l 3.1816,-3.1816 3.1816,3.1816 c 0.19578,0.1958 0.51114,0.1958 0.70704,0 0.19578,-0.1959 0.19578,-0.5112 0,-0.7071 l -3.1816,-3.1816 3.1816,-3.1816 c 0.19578,-0.1958 0.19578,-0.5111 0,-0.707 -0.19578,-0.1959 -0.51118,-0.1959 -0.70704,0 l -3.1816,3.1816 -3.1816,-3.1816 c -0.0979,-0.098 -0.22564,-0.1465 -0.35339,-0.1465 z"
-         style="fill:#ffffff;paint-order:stroke fill markers"
+         style="fill:#0b0c11;paint-order:stroke fill markers"
          id="path1293" />
     </g>
   </g>

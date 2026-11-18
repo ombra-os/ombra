@@ -1,0 +1,46 @@
+#!/bin/sh
+# ombra-gateway-run — ExecStart of ombra-gateway.service (single edition): boots the gateway container from its
+# read-only ext4 image. The image is the trust anchor for the Tor side: it must hash equal to the value recorded at
+# install, or nothing starts. The container owns the VM's only NIC (ombra-nic, renamed ombra-upstream inside) and
+# reaches the desktop over the veth pair ombra-gw (here) / ombra-intnet (inside), which keeps the two-VM addresses.
+
+set -eu
+
+IMG=/var/lib/ombra/gateway.img
+SUM=/usr/share/ombra/gateway.img.sha256
+# Tor's guard state, Persistent boots only: a root-only parent, because the files carry the container's numeric
+# debian-tor ids, which mean unrelated accounts on this host
+TOR_STATE=/var/lib/ombra/gateway-state/tor
+
+die() { echo "ombra-gateway: $1 — the gateway stays down" >&2; exit 1; }
+
+[ -f "$IMG" ] || die "$IMG is missing"
+want="$(awk 'NR==1 {print $1}' "$SUM" 2>/dev/null || true)"
+[ -n "$want" ] || die "no recorded image hash in $SUM"
+got="$(sha256sum "$IMG" | awk '{print $1}')"
+[ "$got" = "$want" ] || die "$IMG does not match the hash recorded at install ($got, want $want)"
+
+modprobe loop || die "the loop driver did not load"
+
+# Amnesic (overlay root): Tor state stays in the container's RAM overlay; an idmapped bind cannot be taken from an overlay root
+set --
+if [ "$(findmnt -n -o FSTYPE /)" != overlay ]; then
+    [ -d "$TOR_STATE" ] || die "$TOR_STATE is missing"
+    set -- "--bind=$TOR_STATE:/var/lib/tor:idmap"
+fi
+
+# sandbox hardening: one argument per line, so a VM test that shows one breaks the container can drop just that line.
+# no-new-privileges: nothing the container execs may gain privileges through setuid or file capabilities; tor, dnsmasq
+# and the control-port filter drop to their users by syscall or by systemd's User=, never by a setuid exec (sudo inside
+# the container stops working: nothing on this machine calls it)
+set -- "$@" --no-new-privileges=yes
+# capabilities nothing in the gateway uses (nspawn's default set minus these; CAP_SYS_MODULE, CAP_SYS_RAWIO and
+# CAP_SYS_TIME are never granted): no debugger (ptrace), systemd exits rather than reboot()s in a container (boot),
+# no audit in a user namespace (audit_control, audit_write), no device nodes (mknod), no tty configuration (consoles are
+# masked), no chattr on a read-only image (linux_immutable), no SysV IPC (ipc_owner).
+# CAP_SYS_NICE and CAP_SYS_RESOURCE stay: unit settings (Nice=, LimitNOFILE= above the inherited limit) need them.
+set -- "$@" --drop-capability=CAP_SYS_PTRACE,CAP_SYS_BOOT,CAP_AUDIT_CONTROL,CAP_AUDIT_WRITE,CAP_MKNOD,CAP_SYS_TTY_CONFIG,CAP_LINUX_IMMUTABLE,CAP_IPC_OWNER
+
+exec systemd-nspawn --quiet --keep-unit --boot --image="$IMG" --read-only --volatile=overlay -U \
+    --private-network --network-interface=ombra-nic:ombra-upstream --network-veth-extra=ombra-gw:ombra-intnet \
+    --resolv-conf=off --timezone=off --link-journal=no "$@" --machine=ombra-gateway

@@ -10,4 +10,4 @@ entry() {
               -e "1s/[\$]menuentry_id_option '[^']*'/\$menuentry_id_option '$2'/"
 }
 entry 'Ombra — Persistent' ombra-persistent ''
-entry 'Ombra — Amnesic (RAM only, forgets everything at shutdown)' ombra-amnesic overlayroot=tmpfs
+entry 'Ombra — Amnesic (RAM only, forgets everything at shutdown)' ombra-amnesic overlayroot=tmpfs:recurse=1

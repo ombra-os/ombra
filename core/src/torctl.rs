@@ -1,4 +1,5 @@
-//! Read-only Tor control dialect: status GETINFOs and events only, never SIGNAL/SETCONF/ADD_ONION.
+//! Restricted Tor control dialect: status GETINFOs and scrubbed status events, plus one write (ADD_ONION for
+//! OnionShare, rewritten to the desktop and a fixed port range). Never SIGNAL, SETCONF or arbitrary targets.
 
 use std::io::BufRead;
 
@@ -28,11 +29,24 @@ fn is_service_id(id: &str) -> bool {
 }
 
 /// Filters what Tor sends down to the desktop, line by line: learns the ids of the onion services this connection created,
-/// lets only their HS_DESC events through (relay identities replaced), and drops every event type that was not subscribed.
+/// lets only their HS_DESC events through (relay identities replaced), and drops every async event type outside a fixed
+/// pass list (HS_DESC, scrubbed STATUS_*, BW), whatever the client subscribed to.
 #[derive(Default)]
 pub struct DownstreamFilter {
     owned: Vec<String>,
     partial: Vec<u8>,
+    /// Inside a `NNN+` data block: `Some(kept)` says whether its lines pass, until the closing ".".
+    in_data: Option<bool>,
+    /// An over-long line was dropped mid-way: everything up to its newline goes with it.
+    discarding: bool,
+}
+
+/// One filtered line on its way to the desktop. `ends_reply` marks the final line of a synchronous reply
+/// (`NNN ` with NNN other than 650), so the session can release local answers queued behind it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct DownLine {
+    pub bytes: Vec<u8>,
+    pub ends_reply: bool,
 }
 
 impl DownstreamFilter {
@@ -41,23 +55,61 @@ impl DownstreamFilter {
     }
 
     pub fn feed(&mut self, data: &[u8]) -> Vec<u8> {
+        self.feed_lines(data)
+            .into_iter()
+            .flat_map(|l| l.bytes)
+            .collect()
+    }
+
+    pub fn feed_lines(&mut self, data: &[u8]) -> Vec<DownLine> {
         self.partial.extend_from_slice(data);
         let mut out = Vec::new();
         while let Some(end) = self.partial.iter().position(|&b| b == b'\n') {
             let raw: Vec<u8> = self.partial.drain(..=end).collect();
+            if self.discarding {
+                // the tail of an overflowed line is never a line of its own
+                self.discarding = false;
+                continue;
+            }
             let line = String::from_utf8_lossy(&raw);
-            if let Some(kept) = self.line(line.trim_end_matches(['\r', '\n'])) {
-                out.extend_from_slice(kept.as_bytes());
-                out.extend_from_slice(b"\r\n");
+            if let Some((kept, ends_reply)) = self.classify(line.trim_end_matches(['\r', '\n'])) {
+                let mut bytes = kept.into_bytes();
+                bytes.extend_from_slice(b"\r\n");
+                out.push(DownLine { bytes, ends_reply });
             }
         }
-        if self.partial.len() > 65_536 {
+        if self.discarding {
             self.partial.clear();
+        } else if self.partial.len() > 65_536 {
+            self.partial.clear();
+            self.discarding = true;
         }
         out
     }
 
+    fn classify(&mut self, line: &str) -> Option<(String, bool)> {
+        if let Some(keep) = self.in_data {
+            if line == "." {
+                self.in_data = None;
+            }
+            return keep.then(|| (line.to_string(), false));
+        }
+        let b = line.as_bytes();
+        let coded = b.len() >= 4 && b[..3].iter().all(u8::is_ascii_digit);
+        let kept = self.line(line);
+        if coded && b[3] == b'+' {
+            self.in_data = Some(kept.is_some());
+        }
+        let ends_reply = coded && b[3] == b' ' && &b[..3] != b"650";
+        kept.map(|k| (k, ends_reply))
+    }
+
     fn line(&mut self, line: &str) -> Option<String> {
+        for prefix in ["250-status/bootstrap-phase=", "250 status/bootstrap-phase="] {
+            if let Some(rest) = line.strip_prefix(prefix) {
+                return Some(format!("{prefix}{}", scrub_status_args(rest)));
+            }
+        }
         if let Some(id) = line
             .strip_prefix("250-ServiceID=")
             .or_else(|| line.strip_prefix("250 ServiceID="))
@@ -99,22 +151,85 @@ impl DownstreamFilter {
                 }
                 Some(out)
             }
-            Some("STATUS_SERVER" | "STATUS_CLIENT" | "STATUS_GENERAL" | "CONF_CHANGED" | "BW") => {
-                Some(line.to_string())
+            Some(ev @ ("STATUS_SERVER" | "STATUS_CLIENT" | "STATUS_GENERAL")) => {
+                let tail = rest.trim_start().strip_prefix(ev).unwrap_or("");
+                Some(
+                    format!("650 {ev} {}", scrub_status_args(tail))
+                        .trim_end()
+                        .to_string(),
+                )
             }
+            // single-line only: a multi-line event (CONF_CHANGED) would reach the client cut to its first line
+            Some("BW") => Some(line.to_string()),
             _ => None,
         }
     }
 }
 
-/// A SETEVENTS line made only of known events: the stubbed ones are dropped (the client is told they are set), the rest are forwarded.
-/// `Some(None)` = answer 250 OK locally; `Some(Some(line))` = send this line upstream; `None` = refuse.
-pub fn setevents_plan(rest: &str) -> Option<Option<String>> {
+/// Status-event arguments the desktop may see. Everything else is dropped, notably HOSTADDR/HOSTID (the guard a
+/// bootstrap problem names), SOURCE (the relay behind a CLOCK_SKEW), ADDRESS (an EXTERNAL_ADDRESS is the user's
+/// public IP) and HOSTNAME (a destination).
+pub const STATUS_KEYS_ALLOWED: &[&str] = &[
+    "PROGRESS",
+    "TAG",
+    "SUMMARY",
+    "WARNING",
+    "REASON",
+    "COUNT",
+    "RECOMMENDATION",
+    "SKEW",
+    "CURRENT",
+    "RECOMMENDED",
+];
+
+/// Keeps the bare words (severity, action) and the allowed KEY=value pairs of a status line; quote-aware, so a
+/// SUMMARY="Connecting to a relay" stays one token.
+pub fn scrub_status_args(args: &str) -> String {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    let mut escaped = false;
+    for c in args.chars() {
+        if escaped {
+            cur.push(c);
+            escaped = false;
+        } else if c == '\\' && quoted {
+            cur.push(c);
+            escaped = true;
+        } else if c == '"' {
+            cur.push(c);
+            quoted = !quoted;
+        } else if c.is_whitespace() && !quoted {
+            if !cur.is_empty() {
+                tokens.push(std::mem::take(&mut cur));
+            }
+        } else {
+            cur.push(c);
+        }
+    }
+    if !cur.is_empty() {
+        tokens.push(cur);
+    }
+    tokens
+        .into_iter()
+        .filter(|t| match t.split_once('=') {
+            Some((k, _)) => STATUS_KEYS_ALLOWED.contains(&k),
+            None => t
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b == b'_' || b.is_ascii_digit()),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A SETEVENTS line made only of known events, as the line to send upstream: the stubbed ones are dropped (the client is
+/// told they are set), the rest are forwarded. Tor replaces its whole set on every SETEVENTS, so the line always goes up,
+/// a bare `SETEVENTS` (unsubscribe all) included. `None` = refuse.
+pub fn setevents_plan(rest: &str) -> Option<String> {
     let events: Vec<&str> = rest.split_whitespace().collect();
-    if events.is_empty()
-        || !events
-            .iter()
-            .all(|e| EVENTS_ALLOWED.contains(e) || EVENTS_STUBBED.contains(e))
+    if !events
+        .iter()
+        .all(|e| EVENTS_ALLOWED.contains(e) || EVENTS_STUBBED.contains(e))
     {
         return None;
     }
@@ -123,9 +238,9 @@ pub fn setevents_plan(rest: &str) -> Option<Option<String>> {
         .filter(|e| EVENTS_ALLOWED.contains(e))
         .collect();
     Some(if kept.is_empty() {
-        None
+        "SETEVENTS".to_string()
     } else {
-        Some(format!("SETEVENTS {}", kept.join(" ")))
+        format!("SETEVENTS {}", kept.join(" "))
     })
 }
 
@@ -185,12 +300,12 @@ pub const EVENTS_ALLOWED: &[&str] = &[
     "STATUS_CLIENT",
     "STATUS_GENERAL",
     "STATUS_SERVER",
-    "CONF_CHANGED",
     "BW",
 ];
 
-/// Events Tor Browser's control client asks for at startup; answered locally, never subscribed upstream, so no circuit or stream data can flow.
-pub const EVENTS_STUBBED: &[&str] = &["CIRC", "STREAM", "SIGNAL"];
+/// Events clients ask for that are accepted but never subscribed upstream: Tor Browser's CIRC/STREAM/SIGNAL (no circuit or
+/// stream data can flow) and stem's CONF_CHANGED (multi-line, which the line filter cannot pass whole).
+pub const EVENTS_STUBBED: &[&str] = &["CIRC", "STREAM", "SIGNAL", "CONF_CHANGED"];
 
 /// Local answer for commands the browser needs to see succeed but whose real data must never reach the desktop.
 pub fn stub_reply(line: &str, authed: bool) -> Option<&'static str> {
@@ -199,15 +314,10 @@ pub fn stub_reply(line: &str, authed: bool) -> Option<&'static str> {
     }
     let (verb, rest) = verb_of(line);
     match verb {
-        "SETEVENTS"
-            if !rest.is_empty()
-                && rest
-                    .split_whitespace()
-                    .all(|ev| EVENTS_STUBBED.contains(&ev)) =>
-        {
-            Some("250 OK\r\n")
-        }
         "GETINFO" if rest == "circuit-status" => Some("250-circuit-status=\r\n250 OK\r\n"),
+        // a repeat AUTHENTICATE or PROTOCOLINFO after the handshake is answered here, never forwarded with client bytes
+        "AUTHENTICATE" => Some("250 OK\r\n"),
+        "PROTOCOLINFO" => Some(PROTOCOLINFO_REPLY),
         _ => None,
     }
 }
@@ -226,6 +336,10 @@ fn is_client_auth_v3(key: &str) -> bool {
 /// The one ADD_ONION shape OnionShare needs, rewritten so Tor connects back to the asking desktop on a fixed port range.
 /// Anything else (detached services, non-anonymous mode, other ports or targets, RSA keys) returns None.
 pub fn add_onion_rewrite(rest: &str, client: std::net::IpAddr) -> Option<String> {
+    // no control bytes anywhere: split_whitespace would otherwise swallow a stray CR or tab
+    if rest.bytes().any(|b| b.is_ascii_control()) {
+        return None;
+    }
     let mut parts = rest.split_whitespace();
     let key = parts.next()?;
     let key_ok = key == "NEW:ED25519-V3" || key.strip_prefix("ED25519-V3:").is_some_and(is_b64_key);
@@ -255,6 +369,10 @@ pub fn add_onion_rewrite(rest: &str, client: std::net::IpAddr) -> Option<String>
                 return None;
             }
             let (virt, target) = spec.split_once(',')?;
+            // digits only: u16's parser also takes a leading '+'
+            if !target.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
             let target_port: u16 = target.parse().ok()?;
             let ok = match virt {
                 "80" => (ONION_PORT_MIN..=ONION_PORT_MAX).contains(&target_port),
@@ -265,13 +383,12 @@ pub fn add_onion_rewrite(rest: &str, client: std::net::IpAddr) -> Option<String>
                 return None;
             }
             port = Some(format!("Port={virt},{client}:{target_port}"));
-        } else if let Some(key) = token.strip_prefix("ClientAuthV3=") {
+        } else {
+            let key = token.strip_prefix("ClientAuthV3=")?;
             if !is_client_auth_v3(key) || auths.len() >= 8 {
                 return None;
             }
             auths.push(key);
-        } else {
-            return None;
         }
     }
     let mut out = format!("ADD_ONION {key}");
@@ -324,14 +441,14 @@ pub fn command_allowed(line: &str, authed: bool) -> bool {
 
 /// One unknown keyword refuses the whole line — partial answers would leak.
 pub fn getinfo_allowed(rest: &str) -> bool {
-    !rest.is_empty()
+    rest.split_whitespace().next().is_some()
         && rest
             .split_whitespace()
             .all(|kw| GETINFO_ALLOWED.contains(&kw))
 }
 
 pub fn getconf_allowed(rest: &str) -> bool {
-    !rest.is_empty()
+    rest.split_whitespace().next().is_some()
         && rest
             .split_whitespace()
             .all(|kw| GETCONF_ALLOWED.iter().any(|a| a.eq_ignore_ascii_case(kw)))
@@ -342,12 +459,10 @@ pub fn del_onion_allowed(rest: &str) -> bool {
     rest.len() == 56 && rest.bytes().all(|b| matches!(b, b'a'..=b'z' | b'2'..=b'7'))
 }
 
-/// Every event name must be whitelisted; bare `SETEVENTS` (all events) is refused.
+/// Every event name must be whitelisted; bare `SETEVENTS` (unsubscribe all, as tor reads it) passes.
 pub fn setevents_allowed(rest: &str) -> bool {
-    !rest.is_empty()
-        && rest
-            .split_whitespace()
-            .all(|ev| EVENTS_ALLOWED.contains(&ev))
+    rest.split_whitespace()
+        .all(|ev| EVENTS_ALLOWED.contains(&ev))
 }
 
 /// Accepts the shared auth value (hex, any case) or an empty token (NULL auth); the whitelist stays the gate.
@@ -480,18 +595,17 @@ mod tests {
     #[test]
     fn stubs_answer_locally_and_only_for_known_lines() {
         assert_eq!(
-            stub_reply("SETEVENTS CIRC STREAM", true),
-            Some("250 OK\r\n")
-        );
-        assert_eq!(
             stub_reply("GETINFO circuit-status", true),
             Some("250-circuit-status=\r\n250 OK\r\n")
         );
-        assert_eq!(stub_reply("SETEVENTS CIRC STREAM", false), None);
-        assert_eq!(stub_reply("SETEVENTS CIRC ORCONN", true), None);
+        // SETEVENTS is never answered locally: tor must see each one to replace its set
+        assert_eq!(stub_reply("SETEVENTS CIRC STREAM", true), None);
         assert_eq!(stub_reply("SETEVENTS", true), None);
         assert_eq!(stub_reply("GETINFO circuit-status ns/all", true), None);
         assert_eq!(stub_reply("GETINFO stream-status", true), None);
+        assert_eq!(stub_reply("AUTHENTICATE", true), Some("250 OK\r\n"));
+        assert_eq!(stub_reply("PROTOCOLINFO 1", true), Some(PROTOCOLINFO_REPLY));
+        assert_eq!(stub_reply("AUTHENTICATE", false), None);
     }
 
     fn ip() -> std::net::IpAddr {
@@ -608,18 +722,28 @@ mod tests {
     #[test]
     fn mixed_event_subscriptions_forward_only_the_allowed_events() {
         assert_eq!(
-            setevents_plan("SIGNAL CONF_CHANGED STATUS_SERVER"),
-            Some(Some("SETEVENTS CONF_CHANGED STATUS_SERVER".to_string()))
+            setevents_plan("SIGNAL CONF_CHANGED STATUS_SERVER").as_deref(),
+            Some("SETEVENTS STATUS_SERVER")
         );
-        assert_eq!(setevents_plan("SIGNAL CIRC"), Some(None));
         assert_eq!(
-            setevents_plan("SIGNAL HS_DESC"),
-            Some(Some("SETEVENTS HS_DESC".to_string()))
+            setevents_plan("SIGNAL HS_DESC").as_deref(),
+            Some("SETEVENTS HS_DESC")
         );
-        assert_eq!(setevents_plan("BW"), Some(Some("SETEVENTS BW".to_string())));
+        assert_eq!(setevents_plan("BW").as_deref(), Some("SETEVENTS BW"));
         assert_eq!(setevents_plan("SIGNAL ORCONN"), None);
         assert_eq!(setevents_plan("ADDRMAP"), None);
-        assert_eq!(setevents_plan(""), None);
+        assert_eq!(setevents_plan("BW DEBUG"), None);
+    }
+
+    #[test]
+    fn every_setevents_replaces_the_upstream_set() {
+        // stubbed-only and bare lines still go up, empty, so an earlier subscription is dropped
+        assert_eq!(setevents_plan("SIGNAL CIRC").as_deref(), Some("SETEVENTS"));
+        assert_eq!(setevents_plan("CONF_CHANGED").as_deref(), Some("SETEVENTS"));
+        assert_eq!(setevents_plan("").as_deref(), Some("SETEVENTS"));
+        assert_eq!(setevents_plan("   ").as_deref(), Some("SETEVENTS"));
+        assert!(command_allowed("SETEVENTS", true));
+        assert!(!command_allowed("SETEVENTS", false));
     }
 
     #[test]
@@ -659,10 +783,6 @@ mod tests {
         assert!(command_allowed("GETINFO onions/current", true));
         assert!(!command_allowed("GETINFO onions/detached", true));
         assert_eq!(stub_reply("SETEVENTS HS_DESC", true), None);
-        assert_eq!(
-            stub_reply("SETEVENTS SIGNAL CIRC", true),
-            Some("250 OK\r\n")
-        );
     }
 
     #[test]
@@ -684,8 +804,9 @@ mod tests {
     #[test]
     fn setevents_requires_only_known_events() {
         assert!(setevents_allowed("STATUS_CLIENT"));
-        assert!(setevents_allowed("STATUS_CLIENT CONF_CHANGED BW"));
-        assert!(!setevents_allowed(""));
+        assert!(setevents_allowed("STATUS_CLIENT BW"));
+        assert!(setevents_allowed(""));
+        assert!(!setevents_allowed("STATUS_CLIENT CONF_CHANGED"));
         assert!(!setevents_allowed("DEBUG"));
         assert!(!setevents_allowed("STATUS_CLIENT EXTRAOCTANE"));
     }
@@ -771,5 +892,217 @@ mod tests {
     fn the_shared_cookie_is_well_formed_hex() {
         assert_eq!(CLIENT_COOKIE_HEX.len(), 64);
         assert!(CLIENT_COOKIE_HEX.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn status_events_lose_every_address_and_destination() {
+        let mut f = DownstreamFilter::new();
+        let out = f.feed(b"650 STATUS_CLIENT WARN BOOTSTRAP PROGRESS=10 TAG=conn_done SUMMARY=\"Connected to a relay\" WARNING=\"Connection refused\" REASON=CONNECTREFUSED COUNT=3 RECOMMENDATION=ignore HOSTID=\"$AAAA\" HOSTADDR=\"198.51.100.7:443\"\r\n");
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(text, "650 STATUS_CLIENT WARN BOOTSTRAP PROGRESS=10 TAG=conn_done SUMMARY=\"Connected to a relay\" WARNING=\"Connection refused\" REASON=CONNECTREFUSED COUNT=3 RECOMMENDATION=ignore\r\n");
+        let out =
+            f.feed(b"650 STATUS_GENERAL WARN CLOCK_SKEW SKEW=-3600 SOURCE=OR:198.51.100.7:443\r\n");
+        assert_eq!(out, b"650 STATUS_GENERAL WARN CLOCK_SKEW SKEW=-3600\r\n");
+        let out = f.feed(
+            b"650 STATUS_SERVER NOTICE EXTERNAL_ADDRESS ADDRESS=203.0.113.9 METHOD=DIRSERV\r\n",
+        );
+        assert_eq!(out, b"650 STATUS_SERVER NOTICE EXTERNAL_ADDRESS\r\n");
+        let out =
+            f.feed(b"650 STATUS_CLIENT WARN SOCKS_BAD_HOSTNAME HOSTNAME=\"secret.example\"\r\n");
+        assert_eq!(out, b"650 STATUS_CLIENT WARN SOCKS_BAD_HOSTNAME\r\n");
+        let out = f.feed(b"250-status/bootstrap-phase=WARN BOOTSTRAP PROGRESS=5 TAG=conn HOSTADDR=\"198.51.100.7:443\"\r\n");
+        assert_eq!(
+            out,
+            b"250-status/bootstrap-phase=WARN BOOTSTRAP PROGRESS=5 TAG=conn\r\n"
+        );
+    }
+
+    #[test]
+    fn multi_line_conf_changed_events_are_dropped_whole() {
+        let mut f = DownstreamFilter::new();
+        assert!(f
+            .feed_lines(b"650-CONF_CHANGED\r\n650-SocksPort=9050\r\n650 OK\r\n")
+            .is_empty());
+        // the stream stays in sync: the next reply passes and still ends its command
+        let lines = f.feed_lines(b"250 OK\r\n");
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].ends_reply);
+    }
+
+    #[test]
+    fn verbs_are_matched_exactly_and_lowercase_is_refused() {
+        for line in [
+            "getinfo version",
+            "Getinfo version",
+            "setevents BW",
+            "authenticate",
+            "add_onion NEW:ED25519-V3 Port=80,17600",
+            "del_onion aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "getconf HiddenServiceSingleHopMode",
+        ] {
+            assert!(!command_allowed(line, true), "{line:?} must be refused");
+            assert_eq!(stub_reply(line, true), None, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn tab_and_vertical_tab_are_not_verb_separators() {
+        for line in [
+            "GETINFO\tversion",
+            "GETINFO\x0bversion",
+            "SETEVENTS\tBW",
+            "SETEVENTS\x0bBW",
+            "GETCONF\tHiddenServiceSingleHopMode",
+            "QUIT\tnow",
+            "AUTHENTICATE\tdeadbeef",
+        ] {
+            assert!(!command_allowed(line, true), "{line:?} must be refused");
+            assert_eq!(stub_reply(line, true), None, "{line:?}");
+        }
+        // inside the arguments they split, so a refused key cannot hide behind one
+        assert!(!command_allowed("GETINFO version\tcircuit-status", true));
+        assert!(!command_allowed("GETINFO version\x0bns/all", true));
+        assert!(!command_allowed("SETEVENTS BW\tCIRC_MINOR", true));
+        assert_eq!(setevents_plan("BW\x0bORCONN"), None);
+    }
+
+    #[test]
+    fn a_carriage_return_mid_line_cannot_smuggle_a_second_command() {
+        assert_eq!(
+            chomp("GETINFO version\rSIGNAL HALT\r\n"),
+            "GETINFO version\rSIGNAL HALT"
+        );
+        assert!(!command_allowed("GETINFO version\rSIGNAL HALT", true));
+        assert!(!command_allowed("GETINFO version\rns/all", true));
+        assert!(!command_allowed("SIGNAL\rGETINFO version", true));
+        assert!(!command_allowed("DEL_ONION aaaa\rSIGNAL HALT", true));
+        assert_eq!(setevents_plan("BW\rSIGNAL HALT"), None);
+        assert_eq!(
+            add_onion_rewrite("NEW:ED25519-V3 Port=80,17600\rSIGNAL HALT", ip()),
+            None
+        );
+    }
+
+    #[test]
+    fn an_embedded_nul_is_refused() {
+        for line in [
+            "GETINFO version\0",
+            "GETINFO\0version",
+            "GETINFO version\0circuit-status",
+            "SETEVENTS BW\0",
+            "GETCONF HiddenServiceSingleHopMode\0",
+            "QUIT\0",
+            "\0GETINFO version",
+        ] {
+            assert!(!command_allowed(line, true), "{line:?} must be refused");
+        }
+        assert_eq!(setevents_plan("BW\0"), None);
+        assert!(!del_onion_allowed(&format!("{}\0", "a".repeat(55))));
+        assert_eq!(
+            add_onion_rewrite("NEW:ED25519-V3 Port=80,17600\0", ip()),
+            None
+        );
+        assert_eq!(
+            add_onion_rewrite("NEW:ED25519-V3\0 Port=80,17600", ip()),
+            None
+        );
+    }
+
+    #[test]
+    fn plus_prefixed_multi_line_verbs_are_refused() {
+        for line in [
+            "+GETINFO version",
+            "+SETEVENTS BW",
+            "+GETCONF HiddenServiceSingleHopMode",
+            "+QUIT",
+            "+PROTOCOLINFO 1",
+            "+AUTHENTICATE",
+            "+ADD_ONION NEW:ED25519-V3 Port=80,17600",
+            "+DEL_ONION aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ] {
+            assert!(!command_allowed(line, true), "{line:?} must be refused");
+            assert!(!command_allowed(line, false), "{line:?} must be refused");
+            assert_eq!(stub_reply(line, true), None, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn a_no_break_space_never_joins_or_hides_getinfo_keys() {
+        assert!(!command_allowed(
+            "GETINFO version\u{a0}circuit-status",
+            true
+        ));
+        assert!(!command_allowed("GETINFO\u{a0}version", true));
+        assert!(!getinfo_allowed("version\u{a0}ns/all"));
+        assert!(!getinfo_allowed("\u{a0}"));
+        assert!(!getconf_allowed(
+            "HiddenServiceSingleHopMode\u{a0}SocksPort"
+        ));
+        assert_eq!(setevents_plan("BW\u{a0}ORCONN"), None);
+    }
+
+    #[test]
+    fn an_upstream_line_over_64k_is_dropped_whole() {
+        let mut f = DownstreamFilter::new();
+        let mut big = b"650 CIRC 1 BUILT ".to_vec();
+        big.extend(std::iter::repeat_n(b'A', 70_000));
+        let mut out = Vec::new();
+        for chunk in big.chunks(4096) {
+            out.extend(f.feed_lines(chunk));
+        }
+        out.extend(f.feed_lines(b" $ABCD~relay 198.51.100.7\r\n"));
+        assert!(
+            out.is_empty(),
+            "the tail of an overflowed line leaked: {:?}",
+            out.iter()
+                .map(|l| String::from_utf8_lossy(&l.bytes)
+                    .chars()
+                    .take(80)
+                    .collect::<String>())
+                .collect::<Vec<_>>()
+        );
+        // and the stream resynchronizes on the next whole line
+        assert_eq!(f.feed(b"250 OK\r\n"), b"250 OK\r\n");
+    }
+
+    #[test]
+    fn signed_or_padded_onion_ports_are_refused() {
+        for rest in [
+            "NEW:ED25519-V3 Port=80,+17600",
+            "NEW:ED25519-V3 Port=80,+1760",
+            "NEW:ED25519-V3 Port=+80,17600",
+            "NEW:ED25519-V3 Port=80,-17600",
+            "NEW:ED25519-V3 Port=80, 17600",
+            "NEW:ED25519-V3 Port=+1,1",
+            "NEW:ED25519-V3 Port=80,0x44c0",
+            "NEW:ED25519-V3 Port=80,17600.0",
+        ] {
+            assert_eq!(
+                add_onion_rewrite(rest, ip()),
+                None,
+                "{rest:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn add_onion_tokens_are_strict() {
+        for rest in ["NEW:ED25519-V3 Port=1,+1", "NEW:ED25519-V3 Port=80,17600\r"] {
+            let got = add_onion_rewrite(rest, ip());
+            assert_eq!(got, None, "{rest:?} must be refused, got {got:?}");
+        }
+    }
+
+    #[test]
+    fn reply_ends_are_marked_and_data_blocks_are_not_mistaken_for_them() {
+        let mut f = DownstreamFilter::new();
+        let lines =
+            f.feed_lines(b"250+config-text=\r\n250 not an end\r\n.\r\n250 OK\r\n650 BW 1 2\r\n");
+        let ends: Vec<bool> = lines.iter().map(|l| l.ends_reply).collect();
+        assert_eq!(ends, vec![false, false, false, true, false]);
+        // a dropped event's data block is dropped with it
+        let lines = f.feed_lines(b"650+NS\r\nr relay 1.2.3.4\r\n.\r\n250 OK\r\n");
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].ends_reply);
     }
 }

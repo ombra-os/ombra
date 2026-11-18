@@ -65,12 +65,12 @@ BackgroundAlternate=21,24,33
 BackgroundNormal=17,19,27
 DecorationFocus=143,155,255
 DecorationHover=143,155,255
-ForegroundActive=246,116,0,150
-ForegroundInactive=136,136,136,150
+ForegroundActive=143,155,255,150
+ForegroundInactive=139,141,147,150
 ForegroundLink=143,155,255
 ForegroundNegative=240,113,107
 ForegroundNeutral=242,194,96
-ForegroundNormal=222,222,222,150
+ForegroundNormal=244,243,239,150
 ForegroundPositive=86,214,138
 ForegroundVisited=195,155,255
 

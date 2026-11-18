@@ -2,7 +2,7 @@
 # run-gateway-leaks.sh — Ombra gateway leak-test orchestrator (host side):
 # drives the shipped root-owned /usr/local/sbin/ombra-leak-probe in the live
 # gateway over vmrun guest ops (a shipped image has no sshd; nothing is
-# downloaded), prints the mirrored report, exits the probe's code
+# downloaded), prints the mirrored report, exits the report's fail count
 # (0 = all seven pass, else the failing count; FATAL here exits 125).
 # Usage: run-gateway-leaks.sh <gateway.vmx>   (or: OMBRA_VMX=<path>)
 # (env: OMBRA_VMRUN / OMBRA_GUEST_USER / OMBRA_GUEST_PASS — the password has no default)
@@ -62,6 +62,7 @@ gop listProcessesInGuest "$VMX" >/dev/null \
     || die "guest ops failed (vmrun error above; open-vm-tools live? OMBRA_GUEST_USER/OMBRA_GUEST_PASS right?)"
 
 echo "running the shipped probe as root (no streaming output — the report prints when it returns)"
+# vmrun's status is its own, not reliably the probe's: the verdict is the report's SUMMARY line, RC only cross-checks it
 gop runProgramInGuest "$VMX" /usr/bin/sudo /usr/local/sbin/ombra-leak-probe
 RC=$?
 
@@ -79,14 +80,17 @@ fi
 echo
 echo "==== probe report (guest:$GUEST_REPORT) ===="
 cat "$HOST_REPORT"
+FAILN=$(sed -n 's/^SUMMARY: .* fail=\([0-9][0-9]*\)$/\1/p' "$HOST_REPORT" | tail -1)
 rm -f "$HOST_REPORT"
 
 gop runProgramInGuest "$VMX" /bin/rm -f "$GUEST_REPORT" >/dev/null 2>&1 || true
 
 echo
-if [ "$RC" -eq 0 ]; then
-    echo "==== RESULT: PASS (7/7) — no leaks detected ===="
-else
-    echo "==== RESULT: FAIL ($RC/7) — see the FAIL lines above; do NOT weaken a failing test, report it ===="
+[ -n "$FAILN" ] || die "the report has no SUMMARY line — the probe did not finish (vmrun exit $RC)"
+if [ "$FAILN" -gt 0 ]; then
+    echo "==== RESULT: FAIL ($FAILN/7) — see the FAIL lines above; do NOT weaken a failing test, report it ===="
+    exit "$FAILN"
 fi
-exit "$RC"
+[ "$RC" -eq 0 ] || die "the report says fail=0 but vmrun exited $RC — result inconsistent, not a pass"
+echo "==== RESULT: PASS (7/7) — no leaks detected ===="
+exit 0

@@ -1,0 +1,9 @@
+# cargo-audit configuration (picked up when `cargo audit` runs in core/).
+
+[advisories]
+ignore = [
+    # ttf-parser is unmaintained (via fontdue). Accepted: it only ever parses
+    # the first-party font embedded in the binary at build time, never a font
+    # from disk or the network, so there is no untrusted input to it.
+    "RUSTSEC-2026-0192",
+]

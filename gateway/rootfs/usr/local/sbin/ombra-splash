@@ -27,6 +27,13 @@ uptime_hm() {
     cut -d. -f1 /proc/uptime | awk '{printf "%dm %02ds", $1/60, $1%60}'
 }
 
+# the boot mode actually running: an overlay root is the amnesic session
+if [ "$(findmnt -no FSTYPE / 2>/dev/null)" = overlay ]; then
+    MODE='amnesic - session resets at boot'
+else
+    MODE='persistent - writes stay on disk'
+fi
+
 # ---- console geometry ------------------------------------------------------
 # $1 = tty device. Emits "rows cols"; falls back to the headless default.
 geom() {
@@ -80,7 +87,7 @@ render() {
         -v LABEL="$LABEL" -v TEXT="$TEXT" -v RULE="$RULE" -v GOOD="$GOOD" \
         -v verdict="$_verdict" \
         -v torline="$_torline" -v up="$_up" -v failed="$_failed" \
-        -v conrows="$_rows" -v concols="$_cols" '
+        -v conrows="$_rows" -v concols="$_cols" -v mode="$MODE" '
     {
         raw = $0
         out = ""
@@ -102,7 +109,7 @@ render() {
         panel[4] = sprintf("%sstatus%s   %s", LABEL, OFF, verdict)
         panel[5] = sprintf("%stor%s      %s", LABEL, OFF, torline)
         panel[6] = sprintf("%suptime%s   %s%s%s", LABEL, OFF, BRAND, up, OFF)
-        panel[7] = sprintf("%smode%s     %slive - session resets at boot%s", LABEL, OFF, TEXT, OFF)
+        panel[7] = sprintf("%smode%s     %s%s%s", LABEL, OFF, TEXT, mode, OFF)
         panel[8] = ""
         panel[9] = sprintf("%sready - all traffic routes through tor%s", GOOD, OFF)
         np = 9

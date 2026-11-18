@@ -1,39 +1,133 @@
 #!/bin/sh
-# Update Ombra: native dialogs around `ombra-update apply`, so nothing depends on terminal colors.
+# Update Ombra: native dialogs around `ombra-update apply` and `ombra-update security`, so nothing depends on terminal colors.
+# ombra-update exit codes: 0 done, 1 failed or refused with nothing changed, 3 failed and rolled back at the next restart,
+# 4 failed and could not be rolled back, 75 Debian could not be reached; pkexec answers 126/127 when the password was
+# refused or the window closed.
 T="Update Ombra"
+U=/usr/local/sbin/ombra-update
+
+# what an undo does to the home folder depends on the disk layout (1.1 installs keep /home on the root volume)
+INFO=$("$U" info 2>/dev/null)
+info() { printf '%s\n' "$INFO" | sed -n "s/^$1=//p" | head -n1; }
+if [ "$(info home_on_root)" = no ]; then
+    UNDO_DATA="Your home folder is on its own volume, so undoing does not touch your files."
+    UNDO_LATER="If you undo it later, the system goes back to how it was before; your home folder is not affected."
+    LOST_BEFORE_RESTART="Your home folder is not affected."
+else
+    UNDO_DATA="Undoing returns the whole system disk, including your home folder, to the moment before the update. Anything saved since then (files, wallets, chats, settings) is lost. Back up first."
+    UNDO_LATER="If you undo it later, everything on the system disk, including files saved after the update, goes back to how it was before."
+    LOST_BEFORE_RESTART="Anything you save before restarting is lost."
+fi
+amnesic() { [ "$(info mode)" = amnesic ] || grep -q 'overlayroot=tmpfs' /proc/cmdline || [ "$(findmnt -n -o FSTYPE / 2>/dev/null)" = overlay ]; }
 
 if [ "${1:-}" = --undo ]; then
-    kdialog --title "$T" --yes-label "Undo the update" --no-label "Cancel" --warningyesno "This puts Ombra back to the version before the last update. It is only possible until ten minutes after the restart that followed the update.\n\nYour files and settings are not touched." 2>/dev/null || exit 0
+    kdialog --title "$T" --yes-label "Undo the update" --no-label "Cancel" --warningyesno "This puts Ombra back to how it was before the last update (an Ombra update or Debian security updates). It is only possible until ten minutes after the restart that followed the update.\n\n$UNDO_DATA" 2>/dev/null || exit 0
     out=$(mktemp /tmp/ombra-update.XXXXXX); trap 'rm -f "$out"' EXIT
-    pkexec /usr/local/sbin/ombra-update rollback >"$out" 2>&1; rc=$?
+    pkexec "$U" rollback >"$out" 2>&1; rc=$?
     if [ "$rc" = 0 ]; then
-        kdialog --title "$T" --yes-label "Restart now" --no-label "Later" --yesno "The previous version is restored once you restart.\n\nRestart twice before updating again, and choose Persistent each time." 2>/dev/null && systemctl reboot
+        kdialog --title "$T" --yes-label "Restart now" --no-label "Later" --warningyesno "The previous state is restored once you restart. $LOST_BEFORE_RESTART\n\nRestart twice before updating again, and choose Persistent each time." 2>/dev/null && systemctl reboot
+    elif [ "$rc" = 126 ] || [ "$rc" = 127 ]; then
+        kdialog --title "$T" --sorry "Nothing was undone: the password was not accepted, or the window was closed." 2>/dev/null
     else
-        kdialog --title "$T" --sorry "There is nothing to undo, or the password was not accepted.\n\n$(grep -v 'leaked on\|^$' "$out" | tail -n 4)" 2>/dev/null
+        kdialog --title "$T" --sorry "Nothing was undone.\n\n$(grep -v 'leaked on\|^$' "$out" | tail -n 4)" 2>/dev/null
     fi
     exit 0
 fi
+
+# Debian security updates: only ever fetched when the user presses the button
+security() {
+    if amnesic; then
+        kdialog --title "$T" --sorry "This session is Amnesic, so Debian updates can't be installed.\n\nRestart, choose Persistent at the boot menu, and open Update Ombra again." 2>/dev/null
+        exit 0
+    fi
+    out=$(mktemp /tmp/ombra-update.XXXXXX); trap 'rm -f "$out"' EXIT
+    kdialog --title "$T" --passivepopup "Checking Debian security updates through Tor. This takes a few minutes; please keep this machine on." 10 2>/dev/null &
+    pkexec "$U" security >"$out" 2>&1; rc=$?
+    clean=$(grep -v 'leaked on\|^$' "$out" | tail -n 8)
+    case "$rc" in
+        0)
+            if grep -q 'no Debian updates are pending' "$out"; then
+                kdialog --title "$T" --msgbox "There are no Debian updates to install. Nothing was changed." 2>/dev/null
+            elif [ "$(sed -n 2p /run/ombra/update 2>/dev/null)" = restart ]; then
+                kdialog --title "$T" --yes-label "Restart now" --no-label "Later" --yesno "Debian's security updates are installed.\n\nRestart to finish: a kernel or core library changed. Choose Persistent at the boot menu.\n\nIf anything seems wrong after restarting, you can undo it for ten minutes after the restart: right-click Update Ombra in the application menu and choose Undo last update." 2>/dev/null \
+                    && systemctl reboot
+            else
+                kdialog --title "$T" --msgbox "Debian's security updates are installed. No restart is needed; programs that were already open use the fixes once you reopen them.\n\nYou can undo it until ten minutes after the next restart: right-click Update Ombra in the application menu and choose Undo last update. Ombra updates wait until then." 2>/dev/null
+            fi
+            ;;
+        126|127)
+            kdialog --title "$T" --sorry "Nothing was started.\n\nThe password was not accepted, or the window was closed. Nothing was changed." 2>/dev/null ;;
+        75)
+            kdialog --title "$T" --sorry "Ombra could not reach Debian through Tor just now. Nothing was changed.\n\nTry again in a few minutes." 2>/dev/null ;;
+        1)
+            kdialog --title "$T" --error "Debian's updates were not installed. Nothing was changed.\n\n$clean" 2>/dev/null ;;
+        3)
+            kdialog --title "$T" --yes-label "Restart now" --no-label "Later" --warningyesno "Installing Debian's updates failed and was undone, but the previous state only comes back when you restart.\n\nRestart now. $LOST_BEFORE_RESTART Choose Persistent at the boot menu.\n\n$clean" 2>/dev/null \
+                && systemctl reboot ;;
+        4)
+            kdialog --title "$T" --error "Installing Debian's updates failed and could not be undone. Ombra may be partly updated.\n\nBack up your files now. Then right-click Update Ombra and choose Undo last update. If that fails too, reinstall Ombra from a fresh image.\n\n$clean" 2>/dev/null ;;
+        *)
+            kdialog --title "$T" --error "Installing Debian's updates stopped unexpectedly. Ombra may be partly updated: restart, and if anything seems wrong, right-click Update Ombra and choose Undo last update.\n\n$clean" 2>/dev/null ;;
+    esac
+    exit 0
+}
+
 state=$(head -n1 /run/ombra/update 2>/dev/null)
 ver=$(sed -n 2p /run/ombra/update 2>/dev/null)
 cur=$(cat /etc/ombra/version 2>/dev/null)
 case "$ver" in ''|*[!0-9A-Za-z.+~-]*) ver="" ;; esac
 
-if [ "$state" != available ] || [ -z "$ver" ]; then
-    kdialog --title "$T" --msgbox "Ombra is up to date.\n\nIt looks for updates a few minutes after each start and once a day, through Tor." 2>/dev/null
-    exit 0
-fi
+case "$state" in
+    available)
+        [ -n "$ver" ] || state=unknown ;;
+esac
+case "$state" in
+    available) ;;
+    current)
+        kdialog --title "$T" --yes-label "Check Debian security updates" --no-label "Close" --yesno "Ombra is up to date.\n\nIt looks for Ombra updates a few minutes after each start and then daily, through Tor.\n\nOmbra is built on Debian. Debian's security updates are only downloaded when you press Check Debian security updates: then Ombra fetches them from Debian through Tor and installs them. It takes a few minutes, and a restart may be needed. A rollback point is taken first, so you can undo it until ten minutes after the next restart. $UNDO_DATA" 2>/dev/null \
+            && security
+        exit 0 ;;
+    applied)
+        kdialog --title "$T" --msgbox "An update${ver:+ to $ver} is installed. Restart to finish, and choose Persistent at the boot menu." 2>/dev/null
+        exit 0 ;;
+    applied-security)
+        if [ "$ver" = restart ]; then
+            kdialog --title "$T" --msgbox "Debian's security updates are installed. Restart to finish, and choose Persistent at the boot menu." 2>/dev/null
+        else
+            kdialog --title "$T" --msgbox "Debian's security updates are installed." 2>/dev/null
+        fi
+        exit 0 ;;
+    invalid)
+        kdialog --title "$T" --error "Ombra could not trust the update list it downloaded: its signature check failed.\n\nThe update server or the connection may have been tampered with. Nothing was downloaded or installed.\n\nOmbra checks again later. If this keeps happening, look for news on the Ombra website before updating." 2>/dev/null
+        exit 0 ;;
+    stale)
+        kdialog --title "$T" --sorry "The update list from the server is out of date, so Ombra cannot tell whether a newer version exists. Nothing was installed.\n\nThis is usually a temporary server problem. If it lasts for days, the server may be holding updates back: look for news on the Ombra website." 2>/dev/null
+        exit 0 ;;
+    unreachable|no-index)
+        kdialog --title "$T" --sorry "Ombra could not check for updates just now. Nothing was installed.\n\nIt tries again by itself; you can also open Update Ombra later." 2>/dev/null
+        exit 0 ;;
+    *)
+        kdialog --title "$T" --msgbox "Ombra has not checked for updates yet.\n\nIt checks through Tor a few minutes after each start. Try again in a few minutes." 2>/dev/null
+        exit 0 ;;
+esac
 
-grep -q 'overlayroot=tmpfs' /proc/cmdline && {
+amnesic && {
     kdialog --title "$T" --sorry "Ombra $ver is available, but this session is Amnesic, so it can't be updated.\n\nRestart, choose Persistent at the boot menu, and open Update Ombra again." 2>/dev/null
     exit 0
 }
 
-kdialog --title "$T" --yes-label "Update now" --no-label "Not now" --yesno "Ombra $ver is available. You have $cur.\n\nThe update is downloaded through Tor and checked against Ombra's signature before anything is changed. Your files and settings stay as they are.\n\nIt takes a few minutes. When it is done, you restart once to finish." 2>/dev/null || exit 0
+# an update may replace the browser, which cannot happen under a running one
+pgrep -f '/opt/tor-browser/Browser/' >/dev/null 2>&1 && {
+    kdialog --title "$T" --sorry "Ombra $ver is available. Close Tor Browser first, then open Update Ombra again." 2>/dev/null
+    exit 0
+}
+
+kdialog --title "$T" --yes-label "Update now" --no-label "Not now" --yesno "Ombra $ver is available. You have $cur.\n\nThe update is downloaded through Tor and checked against Ombra's signature before anything is changed. The update itself does not change your files. $UNDO_LATER\n\nIt takes a few minutes. When it is done, you restart once to finish." 2>/dev/null || exit 0
 
 out=$(mktemp /tmp/ombra-update.XXXXXX)
 trap 'rm -f "$out"' EXIT
 kdialog --title "$T" --passivepopup "Updating Ombra. Please keep this machine on." 8 2>/dev/null &
-pkexec /usr/local/sbin/ombra-update apply >"$out" 2>&1
+pkexec "$U" apply >"$out" 2>&1
 rc=$?
 clean=$(grep -v 'leaked on\|^$' "$out" | tail -n 8)
 
@@ -45,7 +139,17 @@ case "$rc" in
     126|127)
         kdialog --title "$T" --sorry "The update was not started.\n\nThe password was not accepted, or the window was closed. Nothing was changed. Open Update Ombra to try again." 2>/dev/null
         ;;
+    1)
+        kdialog --title "$T" --error "The update did not finish. Nothing was changed.\n\n$clean" 2>/dev/null
+        ;;
+    3)
+        kdialog --title "$T" --yes-label "Restart now" --no-label "Later" --warningyesno "The update failed and was undone, but the previous version only comes back when you restart.\n\nRestart now. $LOST_BEFORE_RESTART Choose Persistent at the boot menu.\n\n$clean" 2>/dev/null \
+            && systemctl reboot
+        ;;
+    4)
+        kdialog --title "$T" --error "The update failed and could not be undone. Ombra may be partly updated.\n\nBack up your files now. Then right-click Update Ombra and choose Undo last update. If that fails too, reinstall Ombra from a fresh image.\n\n$clean" 2>/dev/null
+        ;;
     *)
-        kdialog --title "$T" --error "The update did not finish. Nothing was left half-applied.\n\n$clean" 2>/dev/null
+        kdialog --title "$T" --error "The update stopped unexpectedly. Ombra may be partly updated: restart, and if anything seems wrong, right-click Update Ombra and choose Undo last update.\n\n$clean" 2>/dev/null
         ;;
 esac

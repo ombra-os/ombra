@@ -80,7 +80,7 @@
          id="use1857"
          transform="translate(0,82.000059)" />
       <circle
-         style="opacity:1;fill:#fdbe04;fill-opacity:1;stroke-width:8;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
+         style="opacity:1;fill:#3a3e52;fill-opacity:1;stroke-width:8;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
          id="circle2559"
          cx="37"
          cy="684.36212"
@@ -93,7 +93,7 @@
          id="use1859"
          transform="translate(40,82.000059)" />
       <circle
-         style="opacity:1;fill:#fdbe04;fill-opacity:1;stroke-width:8;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
+         style="opacity:1;fill:#f2c260;fill-opacity:1;stroke-width:8;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
          id="circle2561"
          cx="77"
          cy="684.36212"
@@ -105,7 +105,7 @@
          height="1"
          rx="0.5"
          ry="0.5"
-         style="fill:#ffffff;paint-order:stroke fill markers"
+         style="fill:#0b0c11;paint-order:stroke fill markers"
          id="rect2887" />
     </g>
     <g
@@ -115,7 +115,7 @@
          id="use1861"
          transform="translate(80,82.000059)" />
       <circle
-         style="opacity:1;fill:#fdbe04;fill-opacity:1;stroke-width:8;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
+         style="opacity:1;fill:#f2c260;fill-opacity:1;stroke-width:8;stroke-linecap:round;stroke-linejoin:round;paint-order:stroke fill markers"
          id="circle2563"
          cx="117"
          cy="684.36212"
@@ -133,7 +133,7 @@
          height="1"
          rx="0.5"
          ry="0.5"
-         style="fill:#ffffff;paint-order:stroke fill markers"
+         style="fill:#0b0c11;paint-order:stroke fill markers"
          id="rect2932" />
     </g>
     <g
@@ -157,7 +157,7 @@
          height="1"
          rx="0.5"
          ry="0.5"
-         style="fill:#ffffff;paint-order:stroke fill markers"
+         style="fill:#0b0c11;paint-order:stroke fill markers"
          id="rect1430" />
     </g>
     <use

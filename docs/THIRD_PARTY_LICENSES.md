@@ -1,19 +1,26 @@
 # Third-party software in the Ombra images
 
 The packages and assets below ship in the images. Everything is either
-from the pinned Debian suite or vendored into the overlay at a pinned
-tag/commit with its hash recorded — nothing is downloaded at install,
-boot, or runtime. Full license texts are embedded in each upstream
+a Debian trixie package taken from the live suite at build time (every
+version recorded in `/usr/share/ombra/packages.txt` on each machine) or
+pinned by sha256 or tag/commit with its hash recorded. The two-VM release
+archives download no software at install or boot; the single VM installer
+ISO downloads its Debian packages from Debian during the install (the
+pinned files travel inside the ISO); at runtime the machines fetch
+only what the [threat model](THREAT_MODEL.md#designed-runtime-probes)
+lists, and new software arrives only as a signed Ombra update the user
+applies. Full license texts are embedded in each upstream
 archive and installed on the images alongside the software; vendored
 license copies live in `desktop/rootfs/usr/share/ombra-assets/`.
 
 | Component | Version/commit | License | Pin / provenance |
 |---|---|---|---|
 | Debian | trixie (13.7.0 netinst) | DFSG-free aggregate | build/pins/debian-netinst-arm64.txt |
-| Tor Browser (alpha — only channel with linux-aarch64 builds) | 16.0a14 | MPL-2.0 (+ bundled licenses in the browser directory) | build/pins/torbrowser.txt |
-| Feather Wallet (AppImage, signature verified at build) | see build/pins/feather.txt | BSD-3-Clause | build/pins/feather.txt |
-| SimpleX Chat (arm64 desktop deb; upstream does not sign it, hash pin only) | see build/pins/simplex.txt | AGPL-3.0 | build/pins/simplex.txt |
+| Tor Browser (stable channel, linux-aarch64) | 16.0.1 | MPL-2.0 (+ bundled licenses in the browser directory) | build/pins/torbrowser.txt |
+| Feather Wallet (AppImage; sha256 pin checked at build, upstream signature checked by the maintainer when the pin was made) | 2.9.1 | BSD-3-Clause | build/pins/feather.txt |
+| SimpleX Chat (arm64 desktop deb; upstream signs only its x86_64 checksums, so this is a sha256 pin with no upstream signature) | 7.1.4 | AGPL-3.0 | build/pins/simplex.txt |
 | Kleopatra, OnionShare, Electrum, proxychains4 (Debian trixie packages) | trixie | GPL-2.0-or-later, GPL-3.0, MIT, GPL-2.0-or-later | Debian suite |
+| Single VM edition: systemd-container, mmdebstrap and e2fsprogs on the desktop, and the gateway container's packages (tor, dnsmasq, nftables and a minbase system; versions in `/usr/share/ombra/gateway-packages.txt`) | trixie | Debian package licenses (`/usr/share/doc/*/copyright`) | Debian suite, at install time |
 | qemu-guest-agent, spice-vdagent (Debian trixie packages; UTM/QEMU guest tools, locked down by `/etc/qemu/qemu-ga.conf`) | trixie | GPL-2.0-or-later, GPL-3.0-or-later | Debian suite |
 | Colloid-kde (look-and-feel, desktop theme, aurorae, color scheme, Kvantum, SDDM greeter) | commit `b768904d10ba9fcb95abfb59538eab100b1fed1e` | GPL-3.0 | desktop/rootfs/usr/share/ombra-assets/README.md |
 | Kaze icons (dark variant) | commit `ab77c4d1cbfbb1fc9de1a125a3f9ed74c2513cd3` | GPL-3.0 | build/pins/kaze.txt |
@@ -23,10 +30,29 @@ license copies live in `desktop/rootfs/usr/share/ombra-assets/`.
 | Panel Colorizer plasmoid | release `v8.0.0` | GPL-3.0 | desktop/rootfs/usr/share/ombra-assets/README.md |
 | Terminus console font (Uni2-Terminus16, embedded in the boot binaries) | console-setup-linux 1.242~deb13u1 (Debian trixie) | Public domain per the console-setup package copyright; the Terminus glyphs are SIL OFL 1.1 upstream (Dimitar Toshkov Zhelev) — recorded under the stricter of the two | core/assets/Uni2-Terminus16.psf (source URL + hashes in desktop/rootfs/usr/share/ombra-assets/README.md) |
 | Ombra wallpapers and logo (first-party; `usr/share/backgrounds/ombra/` and the default wallpaper package) | sha256 per file in the assets README | GPL-3.0-or-later, same terms as the repo | desktop/rootfs/usr/share/ombra-assets/README.md |
+| Session, lock-screen and login wallpapers (`ombra-ink-4k.jpg`, SDDM `background.jpg`) | sha256 in the assets README | first-party (owner to confirm) | desktop/rootfs/usr/share/ombra-assets/README.md |
 | Tor Browser launcher icon (`tor-browser.png`, derived from the pinned bundle's icon) | pinned Tor Browser bundle | Tor Project artwork under the browser's MPL-2.0 distribution; "Tor" and the onion logo are Tor Project trademarks, used only to identify the unmodified launcher | desktop/rootfs/usr/share/ombra-assets/README.md |
 
-Signature chains (verified at build time, fingerprints in the pin
-files): Tor Browser → Tor Browser Developers key.
+Pins: the build enforces the sha256 in each `build/pins/*.txt` file
+(`build/make-install-iso.sh`, `scripts/build.sh`, and again inside the
+installer). It does not check upstream signatures. Where upstream signs,
+the maintainer checked the signature once when the pin was made; the pin
+file records the signer and fingerprint:
+
+| Pin | Upstream signature |
+|---|---|
+| Tor Browser | Signed checksum manifest, Tor Browser Developers key |
+| Feather | Detached signature, FeatherWallet key |
+| SimpleX (arm64) | None: upstream's signed checksum list covers x86_64 files only. The pin proves the file has not changed since, not who built it |
+| Debian netinst | sha256 and size only |
+
+## Source
+
+| Software | Where the source is |
+|---|---|
+| Debian packages | Debian's archive (deb.debian.org, and snapshot.debian.org for older versions), for the exact versions listed in `/usr/share/ombra/packages.txt` on each machine |
+| Ombra's own code and configuration | This repository, at the release tag |
+| Vendored upstream assets and pinned applications | The upstream projects at the tag, commit or release named above and in the assets README |
 
 ## Rust crates linked into the static binaries
 
@@ -48,63 +74,76 @@ package. The `ombra-boot` crate itself is GPL-3.0-or-later.
 | allocator-api2 | 0.2.21 | MIT OR Apache-2.0 |
 | anyhow | 1.0.104 | MIT OR Apache-2.0 |
 | bitflags | 2.13.2 | MIT OR Apache-2.0 |
-| cassowary | 0.3.0 | MIT OR Apache-2.0 |
 | castaway | 0.2.4 | MIT |
 | cfg-if | 1.0.5 | MIT OR Apache-2.0 |
-| compact_str | 0.8.2 | MIT |
-| crossterm | 0.28.1 | MIT |
+| compact_str | 0.9.1 | MIT |
+| convert_case | 0.10.0 | MIT |
+| core_maths | 0.1.1 | MIT |
+| critical-section | 1.2.0 | MIT OR Apache-2.0 |
+| crossterm | 0.29.0 | MIT |
 | darling | 0.24.1 | MIT |
 | darling_core | 0.24.1 | MIT |
 | darling_macro | 0.24.1 | MIT |
-| either | 1.18.0 | MIT OR Apache-2.0 |
-| equivalent | 1.0.2 | Apache-2.0 OR MIT |
-| errno | 0.3.14 | MIT OR Apache-2.0 |
+| derive_more | 2.1.1 | MIT |
+| derive_more-impl | 2.1.1 | MIT |
+| document-features | 0.2.12 | MIT OR Apache-2.0 |
+| either | 1.19.0 | MIT OR Apache-2.0 |
+| equivalent | 1.0.3 | Apache-2.0 OR MIT |
+| errno | 0.3.15 | MIT OR Apache-2.0 |
 | foldhash | 0.1.5 | Zlib |
+| foldhash | 0.2.0 | Zlib |
 | fontdue | 0.9.5 | MIT OR Apache-2.0 OR Zlib |
 | hashbrown | 0.15.5 | MIT OR Apache-2.0 |
+| hashbrown | 0.17.1 | MIT OR Apache-2.0 |
 | heck | 0.5.0 | MIT OR Apache-2.0 |
 | ident_case | 1.0.1 | MIT OR Apache-2.0 |
-| indoc | 2.0.7 | MIT OR Apache-2.0 |
+| indoc | 2.0.8 | MIT OR Apache-2.0 |
 | instability | 0.3.14 | MIT |
-| itertools | 0.13.0 | MIT OR Apache-2.0 |
-| itoa | 1.0.18 | MIT OR Apache-2.0 |
-| libc | 0.2.190 | MIT OR Apache-2.0 |
+| itertools | 0.14.0 | MIT OR Apache-2.0 |
+| itoa | 1.0.19 | MIT OR Apache-2.0 |
+| kasuari | 0.4.13 | MIT OR Apache-2.0 |
+| libc | 0.2.191 | MIT OR Apache-2.0 |
 | libm | 0.2.16 | MIT |
-| linux-raw-sys | 0.4.15 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| line-clipping | 0.3.8 | MIT OR Apache-2.0 |
+| linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| litrs | 1.0.1 | MIT OR Apache-2.0 |
 | lock_api | 0.4.14 | MIT OR Apache-2.0 |
-| log | 0.4.34 | MIT OR Apache-2.0 |
-| lru | 0.12.5 | MIT |
+| log | 0.4.35 | MIT OR Apache-2.0 |
+| lru | 0.18.5 | MIT |
 | memchr | 2.8.3 | Unlicense OR MIT |
-| mio | 1.2.4 | MIT |
+| mio | 1.2.5 | MIT |
 | parking_lot | 0.12.5 | MIT OR Apache-2.0 |
 | parking_lot_core | 0.9.12 | MIT OR Apache-2.0 |
-| paste | 1.0.15 | MIT OR Apache-2.0 |
 | proc-macro2 | 1.0.107 | MIT OR Apache-2.0 |
 | quote | 1.0.47 | MIT OR Apache-2.0 |
-| ratatui | 0.29.0 | MIT |
-| rustix | 0.38.44 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| ratatui | 0.30.2 | MIT |
+| ratatui-core | 0.1.2 | MIT |
+| ratatui-crossterm | 0.1.2 | MIT |
+| ratatui-widgets | 0.3.2 | MIT |
+| rustix | 1.1.6 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustversion | 1.0.23 | MIT OR Apache-2.0 |
 | ryu | 1.0.23 | Apache-2.0 OR BSL-1.0 |
 | scopeguard | 1.2.0 | MIT OR Apache-2.0 |
 | serde_core | 1.0.229 | MIT OR Apache-2.0 |
-| serde_json | 1.0.151 | MIT OR Apache-2.0 |
+| serde_json | 1.0.154 | MIT OR Apache-2.0 |
 | signal-hook | 0.3.18 | Apache-2.0 OR MIT |
 | signal-hook-mio | 0.2.5 | MIT OR Apache-2.0 |
 | signal-hook-registry | 1.4.8 | MIT OR Apache-2.0 |
-| smallvec | 1.16.2 | MIT OR Apache-2.0 |
+| smallvec | 1.16.5 | MIT OR Apache-2.0 |
 | static_assertions | 1.1.0 | MIT OR Apache-2.0 |
 | strsim | 0.11.1 | MIT |
-| strum | 0.26.3 | MIT |
-| strum_macros | 0.26.4 | MIT |
+| strum | 0.28.0 | MIT |
+| strum_macros | 0.28.0 | MIT |
 | syn | 2.0.119 | MIT OR Apache-2.0 |
-| syn | 3.0.6 | MIT OR Apache-2.0 |
+| syn | 3.0.10 | MIT OR Apache-2.0 |
+| thiserror | 2.0.21 | MIT OR Apache-2.0 |
+| thiserror-impl | 2.0.21 | MIT OR Apache-2.0 |
 | ttf-parser | 0.25.1 | MIT OR Apache-2.0 |
-| unicode-ident | 1.0.26 | (MIT OR Apache-2.0) AND Unicode-3.0 |
+| unicode-ident | 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 |
-| unicode-truncate | 1.1.0 | MIT OR Apache-2.0 |
-| unicode-width | 0.1.14 | MIT OR Apache-2.0 |
-| unicode-width | 0.2.0 | MIT OR Apache-2.0 |
-| zeroize | 1.9.0 | Apache-2.0 OR MIT |
+| unicode-truncate | 2.0.1 | MIT OR Apache-2.0 |
+| unicode-width | 0.2.3 | MIT OR Apache-2.0 |
+| zeroize | 1.9.1 | Apache-2.0 OR MIT |
 | zmij | 1.0.23 | MIT |
 
 ## Ombra-authored overrides of upstream metadata
@@ -121,12 +160,12 @@ package. The `ombra-boot` crate itself is GPL-3.0-or-later.
 
 ## Vendoring deltas and display naming
 
-Vendored themes and assets (Colloid-kde, Kaze, and the rest of the
-desktop overlay) ship with their display metadata renamed to Ombra —
-the names a user sees on screen say Ombra, not the upstream project.
-The internal project identifiers (for example `com.github.vinceliuice.*`)
-and every license are unchanged: the renames are cosmetic, the licenses
-travel verbatim, and each asset's upstream source, tag/commit, archive
+Vendored Colloid-kde themes ship with their display names renamed to
+Ombra, so the names a user sees on screen say Ombra. The internal
+project identifiers (for example `com.github.vinceliuice.*`) and the
+licenses are unchanged, and the author fields of the look-and-feel,
+Plasma style and SDDM theme credit the upstream author ("Vince Liuice
+(Colloid-kde), modified for Ombra"). The licenses travel verbatim, and each asset's upstream source, tag/commit, archive
 hash and license are recorded in
 `desktop/rootfs/usr/share/ombra-assets/README.md`.
 
@@ -143,8 +182,8 @@ The embedded Terminus console font is covered by the SIL Open Font
 License 1.1; the full text ships as
 `desktop/rootfs/usr/share/ombra-assets/Terminus-OFL-1.1.txt`.
 
-## Deliberate absences
+## Wallets
 
-No crypto wallet ships in the OS — by decision, not oversight. A wallet
-would arrive only as a fresh decision, a fresh pin, and a fresh
-verification pass.
+Two wallets ship on the desktop: Electrum (Debian trixie package) and
+Feather (sha256-pinned upstream AppImage). Both are listed in the table
+above.

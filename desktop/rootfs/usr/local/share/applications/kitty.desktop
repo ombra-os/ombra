@@ -3,6 +3,7 @@ Type=Application
 Name=kitty
 GenericName=Terminal
 Comment=Fast, feature-full, GPU based terminal
+# software GL: kitty draws near-black text on Fusion's SVGA3D device (see /usr/local/bin/kitty, which pins it for every launch route)
 Exec=env LIBGL_ALWAYS_SOFTWARE=1 kitty
 Icon=utilities-terminal
 Terminal=false

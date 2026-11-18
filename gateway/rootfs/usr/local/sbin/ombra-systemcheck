@@ -81,7 +81,7 @@ elif systemctl is-active --quiet tor@default 2>/dev/null; then
         info "last: $(journalctl -u tor@default -b --no-pager 2>/dev/null | grep -E 'Bootstrapped' | tail -1 | sed 's/^.*Tor\[[0-9]*\]: //')"
     fi
 else
-    fail "tor@default is not running"
+    fail "Tor" "tor@default is not running"
 fi
 
 # 2. firewall: kernel ruleset must equal the shipped file
@@ -108,7 +108,7 @@ fi
 if [ "$ROOTED" -ne 1 ]; then
     skip "Egress" "requires root - run: sudo ombra-systemcheck"
 else
-    EG_RC=$(setpriv --reuid=ombra --regid=ombra --init-groups /bin/sh -c 'curl --connect-timeout 8 -sS -o /dev/null https://check.torproject.org/ 2>/dev/null || echo x$?' 2>&1)
+    EG_RC=$(setpriv --reuid=ombra --regid=ombra --init-groups /bin/sh -c 'curl -q --connect-timeout 8 -sS -o /dev/null https://check.torproject.org/ 2>/dev/null; echo x$?' 2>&1)
     case "$EG_RC" in
         x7)  pass "Egress" "non-tor processes refused (fail-closed holds)" ;;
         x0)  fail "Egress" "NOT refused - firewall off (curl connected)" ;;
@@ -118,8 +118,9 @@ else
 fi
 
 # 4. DNS: dnsmasq runs, and Tor's resolver answers (SOCKS RESOLVE for
-#    names; the DNSPort automap for .onion). The gateway cannot query its
-#    own dnsmasq: it serves ombra-intnet only (except-interface=lo).
+#    names; the DNSPort automap for .onion). dnsmasq binds 10.55.10.1 only
+#    (except-interface=lo: no 127.0.0.1 listener); resolv.conf points the
+#    gateway there, which ombra-leak-probe [3/7] covers via getent.
 dns_query() {
     timeout $(($3 + 3)) bash -c 'exec 3<>"/dev/udp/$0/$1" || exit 1
         printf "\x12\x36\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00$3\x00\x00\x01\x00\x01" >&3
@@ -169,10 +170,12 @@ else
     esac
 fi
 
-# 6b. a newer version exists (the boot-time check runs a few minutes after boot; absent file = nothing to say)
-if [ "$(head -n1 /run/ombra/update 2>/dev/null)" = available ]; then
-    warn "Update" "a new version is available - run: sudo ombra-update apply (Persistent mode)"
-fi
+# 6b. update check verdict (the boot-time check runs a few minutes after boot; absent file = nothing to say)
+case "$(head -n1 /run/ombra/update 2>/dev/null)" in
+    available) warn "Update" "a new version is available - run: sudo ombra-update apply (Persistent mode)" ;;
+    stale)     warn "Update" "the update index is expired or replayed - updates are held back" ;;
+    invalid)   fail "Update" "the update index failed signature verification - possible tampering" ;;
+esac
 
 # 7. no failed units (our own excluded)
 NFAILED=$(systemctl --failed --no-legend 2>/dev/null | grep -cv 'ombra-systemcheck' || true)
@@ -186,7 +189,7 @@ fi
 # 8. listeners must match the design whitelist (no sshd ships; IPv6 is
 #    off, so any v6-family bind is itself unexpected)
 BAD=$(ss -ltnu 2>/dev/null | awk 'NR>1 {print $1, $5}' | grep -vE \
-  '^(tcp 10\.55\.10\.1:53|udp 10\.55\.10\.1:53|udp [0-9.]+%ombra-upstream:68|tcp 10\.55\.10\.1:9050|tcp 10\.55\.10\.1:9040|tcp 10\.55\.10\.1:9052|tcp 127\.0\.0\.1:9050|tcp 127\.0\.0\.1:9051|udp 127\.0\.0\.1:5353)$' || true)
+  '^(tcp 10\.55\.10\.1:53|udp 10\.55\.10\.1:53|udp [0-9.]+%ombra-upstream:68|tcp 10\.55\.10\.1:9050|tcp 10\.55\.10\.1:9150|tcp 10\.55\.10\.1:9040|tcp 10\.55\.10\.1:9052|tcp 127\.0\.0\.1:9050|tcp 127\.0\.0\.1:9051|udp 127\.0\.0\.1:5353)$' || true)
 if [ -z "$BAD" ]; then
     pass "Listeners" "match the design whitelist"
 else

@@ -429,7 +429,15 @@ impl Fb {
         let (red, green, blue) = (u32_at(&var, 32), u32_at(&var, 44), u32_at(&var, 56));
         let (rl, gl, bl) = (u32_at(&var, 36), u32_at(&var, 48), u32_at(&var, 60));
         let stride = u32_at(&fix, 48) as usize;
-        if !ok || bpp != 32 || (rl, gl, bl) != (8, 8, 8) || w == 0 || h == 0 || stride < w * 4 {
+        // rows are written as u32 slices, so every row start must stay 4-byte aligned
+        if !ok
+            || bpp != 32
+            || (rl, gl, bl) != (8, 8, 8)
+            || w == 0
+            || h == 0
+            || stride < w * 4
+            || !stride.is_multiple_of(4)
+        {
             // SAFETY: fd came from into_raw_fd above.
             unsafe { libc::close(fd) };
             return None;
@@ -529,6 +537,8 @@ impl Drop for PixelBackend {
 }
 
 impl Backend for PixelBackend {
+    type Error = io::Error;
+
     fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
@@ -628,6 +638,8 @@ impl Write for UiBackend {
 }
 
 impl Backend for UiBackend {
+    type Error = io::Error;
+
     fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
@@ -746,7 +758,7 @@ mod tests {
         ] {
             r.clear();
             r.draw_cell(5, 5, &cell(sym, st));
-            assert!(r.pixels.iter().any(|p| *p == 0x8f9bff), "{sym}");
+            assert!(r.pixels.contains(&0x8f9bff), "{sym}");
         }
     }
 

@@ -3,6 +3,7 @@
 # verify-bundle.sh — assert the shape of an Ombra UTM bundle (a .utm directory or an ombra-*.utm.zip):
 # the hardware the guest code relies on, every host-guest channel off, and a disk that is intact.
 # Usage: verify-bundle.sh <desktop|gateway> <bundle.utm | archive.utm.zip> [--allow-test]
+# The single edition ships only as its installer ISO, never as a bundle.
 
 set -euo pipefail
 
@@ -17,7 +18,8 @@ trap 'rm -rf "${TMP:?}"' EXIT
 if [ ! -d "$IN" ]; then
   # inspect the archive's own listing: extracting with ditto would silently merge AppleDouble files back into extended attributes
   ZLIST="$(unzip -Z1 "$IN" 2>/dev/null)" || { echo "FATAL: not a readable zip" >&2; exit 1; }
-  if printf '%s\n' "$ZLIST" | grep -q -E '(^|/)\._|__MACOSX|\.DS_Store'; then
+  # a here-string, not a pipe: under pipefail an early-exiting grep -q can turn a match into "clean"
+  if grep -q -E '(^|/)\._|__MACOSX|\.DS_Store' <<< "$ZLIST"; then
     echo "FAIL  the archive carries macOS metadata files (AppleDouble, __MACOSX or .DS_Store)"; ZIPLITTER=1
   fi
 fi
@@ -71,6 +73,8 @@ case "$TARGET" in
 esac
 check "the private link has its own subnet (10.55.20.0/24), not the guests' static 10.55.10.0/24, and no port forwards" \
   '[ "$(pv Network.$LINKNIC.VlanGuestAddress)" = 10.55.20.0/24 ] && [ "$(plen Network.$LINKNIC.PortForward)" = 0 ]'
+check "the display follows the window on the desktop, not on the headless gateway" \
+  '[ "$(pv Display.0.DynamicResolution)" = "$([ "$TARGET" = gateway ] && echo False || echo True)" ]'
 macs_ok() { python3 -c "import plistlib,sys; m=[n['MacAddress'] for n in plistlib.load(open(sys.argv[1],'rb'))['Network']]
 assert len(set(m))==len(m)
 assert all((int(x.split(':')[0],16)&2) and not (int(x.split(':')[0],16)&1) for x in m), m" "$CFG"; }

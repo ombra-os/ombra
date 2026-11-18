@@ -258,24 +258,18 @@ impl Welcome {
                 Action::None
             }
             Screen::DiskPassphrase => {
-                match self.disk_flow.handle_key(key) {
-                    crate::input::FlowEvent::Completed(secret) => {
-                        self.disk_secret = Some(secret);
-                        self.screen = Screen::UserPassword;
-                        self.note = None;
-                    }
-                    _ => {}
+                if let crate::input::FlowEvent::Completed(secret) = self.disk_flow.handle_key(key) {
+                    self.disk_secret = Some(secret);
+                    self.screen = Screen::UserPassword;
+                    self.note = None;
                 }
                 Action::None
             }
             Screen::UserPassword => {
-                match self.user_flow.handle_key(key) {
-                    crate::input::FlowEvent::Completed(secret) => {
-                        self.user_secret = Some(secret);
-                        self.screen = Screen::Summary;
-                        self.note = None;
-                    }
-                    _ => {}
+                if let crate::input::FlowEvent::Completed(secret) = self.user_flow.handle_key(key) {
+                    self.user_secret = Some(secret);
+                    self.screen = Screen::Summary;
+                    self.note = None;
                 }
                 Action::None
             }
@@ -472,14 +466,14 @@ pub fn draw(f: &mut Frame, app: &Welcome) {
                 theme::row_in(c, 0),
                 theme::status_line(
                     theme::GOOD,
-                    "Your system will restart now.",
+                    "Setup takes a few minutes, then your system restarts.",
                     theme::fg(theme::TEXT),
                 ),
             );
             theme::put_centered(
                 f,
                 theme::row_in(c, 1),
-                "At the next screen, enter your NEW passphrase - that is normal.",
+                "After the restart, enter your NEW passphrase - that is normal.",
                 theme::fg(theme::LABEL),
             );
             theme::put_hints(f, theme::row_in(c, 3), app.screen().hints());
@@ -712,20 +706,61 @@ pub fn disk_state_from(
     })
 }
 
+/// The gate's verdict: a valid in-boot keyscript record stands in for the build-key derivation, nothing else.
+pub fn gate_disk_state(
+    reencrypting: bool,
+    recorded_dead: bool,
+    build_key_opens: impl FnOnce() -> Result<bool>,
+) -> Result<DiskState> {
+    disk_state_from(reencrypting, || {
+        if recorded_dead {
+            Ok(false)
+        } else {
+            build_key_opens()
+        }
+    })
+}
+
 fn current_disk_state(dev: &str) -> Result<DiskState> {
+    disk_state_with(dev, false)
+}
+
+/// Header reads only (luksDump, no key derivation) decide "re-encrypting"; then the record or the derivation.
+fn disk_state_with(dev: &str, recorded_dead: bool) -> Result<DiskState> {
     let dump = luks_dump(dev)?;
     let json_says = luks_json(dev)
         .map(|j| reencrypt_in_json(&j))
         .unwrap_or(false);
-    disk_state_from(reencrypt_in_progress(&dump) || json_says, || {
-        let _keyfile = KeyFileGuard::write(BUILD_KEYFILE, crate::BUILD_PASSPHRASE.as_bytes())?;
-        key_opens_device(dev, BUILD_KEYFILE)
+    gate_disk_state(
+        reencrypt_in_progress(&dump) || json_says,
+        recorded_dead,
+        || {
+            let _keyfile = KeyFileGuard::write(BUILD_KEYFILE, crate::BUILD_PASSPHRASE.as_bytes())?;
+            key_opens_device(dev, BUILD_KEYFILE)
+        },
+    )
+}
+
+/// True only for this boot's root-owned tmpfs record naming THIS device; anything else re-derives.
+fn keyscript_recorded_dead(dev: &str) -> bool {
+    crate::keyscript::dead_record_body_for(std::path::Path::new(dev)).is_some_and(|want| {
+        crate::keyscript::dead_record_holds(
+            std::path::Path::new(crate::keyscript::DEAD_RECORD),
+            &want,
+            0,
+            &crate::keyscript::on_tmpfs,
+        )
     })
 }
 
 /// Boot gate: the marker is written only for a sealed disk — build key dead AND no re-encryption pending.
 pub fn probe_build_key() -> Result<bool> {
-    let state = current_disk_state(&discover_luks()?.device)?;
+    let dev = discover_luks()?.device;
+    let recorded = keyscript_recorded_dead(&dev);
+    if recorded {
+        eprintln!("ombra-welcome --probe: build key dead per this boot's keyscript record");
+    }
+    let state = disk_state_with(&dev, recorded)?;
     let sealed = state == DiskState::Sealed;
     record_gate_result(sealed)?;
     Ok(sealed)
@@ -1598,8 +1633,8 @@ mod tests {
 
     #[test]
     fn only_exit_two_is_a_wrong_passphrase() {
-        assert_eq!(passphrase_verdict(Some(0)).unwrap(), true);
-        assert_eq!(passphrase_verdict(Some(2)).unwrap(), false);
+        assert!(passphrase_verdict(Some(0)).unwrap());
+        assert!(!passphrase_verdict(Some(2)).unwrap());
         for code in [Some(1), Some(3), Some(4), Some(5), Some(127), Some(255)] {
             assert!(
                 passphrase_verdict(code).is_err(),
@@ -1624,6 +1659,73 @@ mod tests {
         );
         // a probe error is an error, never "sealed"
         assert!(disk_state_from(false, || bail!("exit 5")).is_err());
+    }
+
+    #[test]
+    fn a_valid_keyscript_record_skips_the_gate_derivation() {
+        let mut derived = 0;
+        let state = gate_disk_state(false, true, || {
+            derived += 1;
+            Ok(true)
+        })
+        .unwrap();
+        assert_eq!(state, DiskState::Sealed);
+        assert_eq!(derived, 0, "derived the build key despite a valid record");
+    }
+
+    #[test]
+    fn without_a_valid_record_the_gate_runs_the_full_probe() {
+        // alive (first use) and dead (sealed) both come from the derivation
+        for (opens, want) in [(true, DiskState::Fresh), (false, DiskState::Sealed)] {
+            let mut derived = 0;
+            let state = gate_disk_state(false, false, || {
+                derived += 1;
+                Ok(opens)
+            })
+            .unwrap();
+            assert_eq!((state, derived), (want, 1));
+        }
+        // a probe error is still an error, never "sealed"
+        assert!(gate_disk_state(false, false, || bail!("cryptsetup exit 1")).is_err());
+    }
+
+    #[test]
+    fn a_record_never_overrides_a_pending_reencrypt() {
+        let state = gate_disk_state(true, true, || panic!("probed the build key")).unwrap();
+        assert_eq!(state, DiskState::Reencrypting);
+        let state = gate_disk_state(true, false, || panic!("probed the build key")).unwrap();
+        assert_eq!(state, DiskState::Reencrypting);
+    }
+
+    #[test]
+    fn the_gate_only_trusts_a_record_that_holds_end_to_end() {
+        use crate::keyscript::{dead_record_body, dead_record_holds, note_build_key_test};
+        let dir = std::env::temp_dir().join(format!("ombra-gate-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let rec = dir.join("gate").join("build-key-dead");
+        let me = unsafe { libc::getuid() };
+        let body = dead_record_body("6f1c0a52-1b7e-4f43-9d0e-8a3c2b1d4e5f", 64771).unwrap();
+        let next_boot = dead_record_body("0b9e3d1a-7c2f-4e8b-a1d6-5f4c3b2a1908", 64771).unwrap();
+        let tmpfs = |_: &fs::File| true;
+        let gate = |want: &str| {
+            let mut derived = 0;
+            let held = dead_record_holds(&rec, want, me, &tmpfs);
+            let state = gate_disk_state(false, held, || {
+                derived += 1;
+                Ok(true)
+            })
+            .unwrap();
+            (state, derived)
+        };
+        // first use: build key alive -> no record -> full probe -> Fresh (welcome runs)
+        assert!(!note_build_key_test(&rec, Some(0), Some(&body)));
+        assert_eq!(gate(&body), (DiskState::Fresh, 1));
+        // sealed: exit 2 -> record -> no derivation
+        assert!(note_build_key_test(&rec, Some(2), Some(&body)));
+        assert_eq!(gate(&body), (DiskState::Sealed, 0));
+        // the same file read against another boot id: full probe
+        assert_eq!(gate(&next_boot), (DiskState::Fresh, 1));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

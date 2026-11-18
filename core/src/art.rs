@@ -80,7 +80,7 @@ pub fn ring_height_for(console_height: u16) -> u16 {
     }
     let (_, rows) = ring_size();
     if console_height < COMPACT_BELOW {
-        (rows + 1) / 2
+        rows.div_ceil(2)
     } else {
         rows
     }

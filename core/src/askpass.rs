@@ -115,7 +115,8 @@ fn packet_for_channel(to_socket: bool, password: &[u8]) -> Vec<u8> {
 /// Bounded: a fifo with no reader or a full socket queue must not hang the agent.
 fn write_channel_bounded(path: &Path, to_socket: bool, frame: &[u8]) -> Result<()> {
     let target = path.to_path_buf();
-    let payload = frame.to_vec();
+    // the writer can outlive the timeout; its copy of the passphrase is wiped whenever it ends
+    let payload = zeroize::Zeroizing::new(frame.to_vec());
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
         .name("askpass-answer".into())

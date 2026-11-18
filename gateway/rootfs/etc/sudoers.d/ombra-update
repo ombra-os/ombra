@@ -1,0 +1,4 @@
+# The console autologs in as ombra (console access is host access) and has no password; these are the update
+# commands it may run as root, with no arguments beyond the subcommand and a clean environment.
+Defaults!/usr/local/sbin/ombra-update env_reset
+ombra ALL=(root) NOPASSWD: /usr/local/sbin/ombra-update apply, /usr/local/sbin/ombra-update rollback, /usr/local/sbin/ombra-update commit, /usr/local/sbin/ombra-update check, /usr/local/sbin/ombra-update status, /usr/local/sbin/ombra-update security --no-rollback

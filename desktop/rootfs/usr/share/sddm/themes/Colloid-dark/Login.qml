@@ -77,14 +77,14 @@ SessionManagementScreen {
     Input {
         id: userNameInput
         Layout.fillWidth: true
-        Layout.preferredHeight: 30
+        Layout.preferredHeight: 36
         font.pointSize: fontSize + 1
         opacity: passwordFieldOutlined ? 1.0 : 0.75
         text: lastUserName
         visible: showUsernamePrompt
         focus: showUsernamePrompt && !lastUserName //if there's a username prompt it gets focus first, otherwise password does
         placeholderText: i18nd("plasma_lookandfeel_org.kde.lookandfeel", "Username")
-        placeholderTextColor: passwordFieldOutlined ? "white" : "white"
+        placeholderTextColor: "#8b8d93"
         color: "white"
         //horizontalAlignment: TextInput.AlignHCenter
         leftPadding: fontSize
@@ -95,14 +95,13 @@ SessionManagementScreen {
         id: passwordBox
         Layout.fillWidth: true
         font.pointSize: fontSize + 1
-        Layout.preferredHeight: 30
-        opacity: passwordFieldOutlined ? 1.0 : 0.75
+        Layout.preferredHeight: 36
         font.family: config.Font || "Noto Sans"
         placeholderText: config.PasswordFieldPlaceholderText == "Password" ? i18nd("plasma_lookandfeel_org.kde.lookandfeel", "Password") : config.PasswordFieldPlaceholderText
         focus: !showUsernamePrompt || lastUserName
         echoMode: TextInput.Password
         onAccepted: startLogin()
-        placeholderTextColor: passwordFieldOutlined ? "white" : "white"
+        placeholderTextColor: "#8b8d93"
         passwordCharacter: config.PasswordFieldCharacter == "" ? "●" : config.PasswordFieldCharacter
         color: "white"
         //horizontalAlignment: TextInput.AlignHCenter

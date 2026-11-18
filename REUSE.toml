@@ -2,14 +2,19 @@ version = 1
 SPDX-PackageName = "Ombra"
 SPDX-PackageDownloadLocation = "https://github.com/ombra-os/ombra"
 
+# First-party files. Third-party files inside these paths are annotated
+# further down; when several annotations match a file, the last one wins.
 [[annotations]]
 path = [
   "core/**",
   "build/**",
   "tests/**",
   "docs/**",
+  "scripts/**",
+  "update/**",
   "README.md",
   "SECURITY.md",
+  "CONTRIBUTING.md",
   "REUSE.toml",
   ".github/**",
   "gateway/**",
@@ -17,12 +22,93 @@ path = [
   "desktop/preseed.cfg",
   "desktop/README.md",
   "desktop/rootfs/README.md",
+  "desktop/single/**",
   "desktop/rootfs/etc/**",
   "desktop/rootfs/usr/local/**",
+  "desktop/rootfs/usr/share/anon-ws-base-files/**",
   "desktop/rootfs/usr/share/backgrounds/**",
-  "desktop/rootfs/usr/share/plasmoids/org.ombra.status/**",
+  "desktop/rootfs/usr/share/initramfs-tools/**",
+  "desktop/rootfs/usr/share/kio/**",
+  "desktop/rootfs/usr/share/ombra-assets/README.md",
   "desktop/rootfs/usr/share/plasma/plasmoids/org.ombra.status/**",
+  "desktop/rootfs/usr/share/polkit-1/**",
+  "desktop/rootfs/usr/share/sddm/faces/**",
+  "desktop/rootfs/usr/share/wallpapers/**",
 ]
 precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Xen"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# Tor Browser launcher icon, derived from the pinned Tor Browser bundle
+[[annotations]]
+path = "desktop/rootfs/usr/local/share/icons/hicolor/128x128/apps/tor-browser.png"
+precedence = "override"
+SPDX-FileCopyrightText = "The Tor Project"
+SPDX-License-Identifier = "MPL-2.0"
+
+# JetBrains Mono Nerd Font and the subsets embedded in the boot binaries
+[[annotations]]
+path = [
+  "core/assets/OmbraUI-Regular.ttf",
+  "core/assets/OmbraUI-Bold.ttf",
+  "desktop/rootfs/usr/share/fonts/ombra/jetbrainsmono-nerdfont/**",
+]
+precedence = "override"
+SPDX-FileCopyrightText = "2020 The JetBrains Mono Project Authors"
+SPDX-License-Identifier = "OFL-1.1"
+
+# Terminus console font (Debian console-setup), embedded in the boot binaries
+[[annotations]]
+path = "core/assets/Uni2-Terminus16.psf"
+precedence = "override"
+SPDX-FileCopyrightText = "Dimitar Toshkov Zhelev"
+SPDX-License-Identifier = "OFL-1.1"
+
+# Colloid-kde themes, modified for Ombra; the SDDM QML files keep their own LGPL headers
+[[annotations]]
+path = [
+  "desktop/rootfs/usr/share/plasma/look-and-feel/**",
+  "desktop/rootfs/usr/share/plasma/desktoptheme/**",
+  "desktop/rootfs/usr/share/aurorae/**",
+  "desktop/rootfs/usr/share/color-schemes/**",
+  "desktop/rootfs/usr/share/Kvantum/**",
+  "desktop/rootfs/usr/share/sddm/themes/**",
+]
+precedence = "closest"
+SPDX-FileCopyrightText = ["Vince Liuice (Colloid-kde)", "2026 Xen"]
+SPDX-License-Identifier = "GPL-3.0-only"
+
+# Kaze icons (dark variant)
+[[annotations]]
+path = "desktop/rootfs/usr/share/icons/Kaze-dark/**"
+precedence = "override"
+SPDX-FileCopyrightText = "2O48 (Kaze)"
+SPDX-License-Identifier = "GPL-3.0-only"
+
+# Phinger cursors (light variant)
+[[annotations]]
+path = "desktop/rootfs/usr/share/icons/phinger-cursors-light/**"
+precedence = "override"
+SPDX-FileCopyrightText = "phisch (phinger-cursors)"
+SPDX-License-Identifier = "CC-BY-SA-4.0"
+
+# Panel Colorizer plasmoid, verbatim
+[[annotations]]
+path = "desktop/rootfs/usr/share/plasma/plasmoids/luisbocanegra.panel.colorizer/**"
+precedence = "override"
+SPDX-FileCopyrightText = "Luis Bocanegra"
+SPDX-License-Identifier = "GPL-3.0-only"
+
+# KDE clipboard applet metadata, modified for Ombra
+[[annotations]]
+path = "desktop/rootfs/usr/share/plasma/plasmoids/org.kde.plasma.clipboard/metadata.json"
+precedence = "override"
+SPDX-FileCopyrightText = ["KDE contributors (plasma-workspace)", "2026 Xen"]
+SPDX-License-Identifier = "GPL-2.0-or-later AND GPL-3.0-or-later"
+
+# Ombra's login wallpaper inside the vendored SDDM theme (origin to be confirmed by the owner)
+[[annotations]]
+path = "desktop/rootfs/usr/share/sddm/themes/Colloid-dark/background.jpg"
+precedence = "override"
 SPDX-FileCopyrightText = "2026 Xen"
 SPDX-License-Identifier = "GPL-3.0-or-later"

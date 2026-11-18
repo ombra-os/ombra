@@ -48,3 +48,8 @@ id_*
 *.lck
 .vmwarevm/
 !build/update-pubkey.pem
+
+# Local-only working files (release secrets in build/local/, agent scratch, draft notes)
+build/local/
+.zcode/
+.release-notes-draft.md

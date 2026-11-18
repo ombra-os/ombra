@@ -14,7 +14,14 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 VMROOT="${HOME}/Virtual Machines.localized"
-VERSION="${OMBRA_VERSION:-1.1.0}"
+# the release version comes from the image itself (1.1 -> 1.1.0 for file names); OMBRA_VERSION overrides
+image_version() {
+  local v
+  v="$(tr -d '[:space:]' < "$REPO/update/rootfs/etc/ombra/version")"
+  case "$v" in *.*.*) ;; *.*) v="$v.0" ;; esac
+  printf '%s' "$v"
+}
+VERSION="${OMBRA_VERSION:-$(image_version)}"
 OUT_DIR="${OMBRA_RELEASE_DIR:-$REPO/build/releases}"
 UTM_VARS="/Applications/UTM.app/Contents/Resources/qemu/edk2-arm-vars.fd"
 
@@ -28,13 +35,15 @@ usage: bash build/utm/export-bundle.sh <desktop|gateway> [vmx-path] [--allow-tes
                 name) into OMBRA_RELEASE_DIR; for end-to-end testing only, never published.
 
   env: OMBRA_VERSION (default $VERSION), OMBRA_RELEASE_DIR (default build/releases)
+
+  the single edition ships only as its installer ISO: build/release-single-iso.sh
 EOF2
 }
 
 fatal() { echo "FATAL: $*" >&2; exit 1; }
 
 TARGET="${1:-}"
-if [ "$TARGET" != "desktop" ] && [ "$TARGET" != "gateway" ]; then usage; exit 2; fi
+case "$TARGET" in desktop|gateway) ;; *) usage; exit 2 ;; esac
 shift
 SRC_VMX=""; ALLOW_TEST=0
 for arg in "$@"; do
@@ -122,7 +131,7 @@ cfg = {
     "Display": [{
         # a Retina window is scaled by exactly 2: nearest keeps text crisp, linear blurs it; shrinking uses linear
         "DownscalingFilter": "Linear", "UpscalingFilter": "Nearest",
-        "DynamicResolution": target == "desktop", "NativeResolution": False,
+        "DynamicResolution": target != "gateway", "NativeResolution": False,
         "Hardware": "virtio-gpu-pci",
     }],
     "Drive": [{
@@ -166,12 +175,18 @@ fi
 
 ZIP="$OUT_DIR/ombra-$TARGET-arm64-v$VERSION.utm.zip"
 rm -f "$ZIP"
-( cd "$STAGE" && ditto -c -k --keepParent --noqtn --norsrc --noextattr --zlibCompressionLevel 1 "ombra-$TARGET.utm" "$ZIP" )
+# a zip that carries no builder metadata: no macOS uid/gid or extended-time fields (-X), DOS times in UTC from fixed
+# mtimes (the local time would give away the builder's time zone); run on the export copy, never the source VM
+zip_clean() { # <parent dir> <entry> <out.zip>
+  ( cd "$1" && find "$2" -exec env TZ=UTC touch -h -t 202601010000.00 {} + && TZ=UTC zip -X -r -q -1 "$3" "$2" )
+}
+zip_clean "$STAGE" "ombra-$TARGET.utm" "$ZIP" || fatal "zip could not create the archive"
 bash "$HERE/verify-bundle.sh" "$TARGET" "$ZIP" || { rm -f "$ZIP"; fatal "the archive failed verification and was removed"; }
-# one SHA256SUMS.txt for every archive present, Fusion and UTM alike (the Fusion exporter does the same)
-( cd "$OUT_DIR" && : > SHA256SUMS.txt.new && for f in ombra-*.vmwarevm.zip ombra-*.utm.zip; do
+# one SHA256SUMS.txt for every archive present, Fusion and UTM alike (the Fusion exporter does the same), and the single ISO
+( cd "$OUT_DIR" && : > SHA256SUMS.txt.new && for f in ombra-*.vmwarevm.zip ombra-*.utm.zip ombra-*.iso; do
     [ -f "$f" ] || continue
     printf '%12s bytes  %s\n' "$(stat -f %z "$f")" "$f"
     shasum -a 256 "$f" >> SHA256SUMS.txt.new
   done && mv SHA256SUMS.txt.new SHA256SUMS.txt )
 echo "done: $ZIP ($(du -h "$ZIP" | awk '{print $1}'))"
+echo "next: sign the sums after the last export (any older SHA256SUMS.txt.sig is now stale): bash scripts/update/sign-sums.sh <private-key> $OUT_DIR/SHA256SUMS.txt"

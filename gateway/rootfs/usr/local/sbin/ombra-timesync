@@ -41,18 +41,31 @@ log() { echo "ombra-timesync: $*"; }
 
 command -v curl >/dev/null 2>&1 || { log "FATAL: curl missing"; exit 1; }
 
+# one source's Date header as epoch seconds, or nothing; name resolution happens inside Tor
+source_time() {
+    d=$(curl -sI --max-time "$TIMEOUT" --socks5-hostname 127.0.0.1:9050 "$1" \
+        | tr -d '\r' | awk 'tolower($1)=="date:" { $1=""; sub(/^ /,""); print; exit }')
+    [ -n "$d" ] && date -u -d "$d" +%s 2>/dev/null
+}
+
+# Quick check first: the timer runs every few minutes so a host sleep is repaired soon after, but one source
+# per run is enough to see that the clock is fine. Only an offset beyond STEP (or no answer) brings in the
+# full majority vote below, and only that vote ever changes the clock.
+set -- $URLS
+shift $(( $(date +%s) / 300 % $# ))
+quick=$(source_time "$1")
+if [ -n "$quick" ]; then
+    qd=$((quick - $(date -u +%s))); [ "$qd" -lt 0 ] && qd=$((-qd))
+    if [ "$qd" -le "$STEP" ]; then
+        log "offset ${qd}s within ${STEP}s tolerance — no step (quick check)"
+        exit 0
+    fi
+fi
+
 dates=""
 for url in $URLS; do
-    # -sI: HEAD only; --socks5-hostname: name resolution happens inside
-    # Tor (no local DNS path involved); loopback SOCKS is firewall-
-    # allowed for everyone, and the fetch itself egresses as debian-tor.
-    d=$(curl -sI --max-time "$TIMEOUT" --socks5-hostname 127.0.0.1:9050 "$url" \
-        | tr -d '\r' | awk 'tolower($1)=="date:" { $1=""; sub(/^ /,""); print; exit }')
-    if [ -n "$d" ]; then
-        # GNU date parses RFC-822-as-HTTP dates directly; -u normalizes.
-        t=$(date -u -d "$d" +%s 2>/dev/null) || t=""
-        [ -n "$t" ] && dates="$dates $t"
-    fi
+    t=$(source_time "$url")
+    [ -n "$t" ] && dates="$dates $t"
 done
 
 n=$(echo $dates | wc -w)
@@ -90,7 +103,7 @@ if [ "$mag" -le "$STEP" ]; then
     exit 0
 fi
 
-if date -u -s "@$best_t" >/dev/null 2>&1 || date -u "$best_t" >/dev/null 2>&1; then
+if date -u -s "@$best_t" >/dev/null 2>&1; then
     log "stepped clock by ${delta}s to consensus $(date -u +%FT%TZ) ($best_c/$n sources)"
 else
     log "clock step FAILED (no permission?) — needs CAP_SYS_TIME"

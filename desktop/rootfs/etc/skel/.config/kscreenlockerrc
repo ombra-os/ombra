@@ -1,6 +1,6 @@
-# the greeter must show ombra-02, not the L&F's Colloid preview wallpaper
+# the lock screen shows the Ombra wallpaper, not the L&F's Colloid preview wallpaper
 [Greeter][Wallpaper][org.kde.image][General]
-Image=/usr/share/backgrounds/ombra/ombra-02-4k.png
+Image=/usr/share/backgrounds/ombra/ombra-ink-4k.jpg
 
 # Timeout is minutes; the machine locks on every wake from sleep
 [Daemon]

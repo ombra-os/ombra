@@ -21,22 +21,31 @@ while IFS= read -r line; do
     esac
 done &
 
-notify() {
+notify() { # [icon title body]
     # replace the previous notice rather than stacking a new one next to it
     prev=$(cat "$IDFILE" 2>/dev/null); case "$prev" in ''|*[!0-9]*) prev=0 ;; esac
     busctl --user call org.freedesktop.Notifications /org/freedesktop/Notifications org.freedesktop.Notifications Notify \
-        susssasa{sv}i "Ombra" "$prev" "system-software-update" "A new version of Ombra is available" \
-        "Click here, or open Update Ombra from the application menu. Updates need Persistent mode." \
+        susssasa{sv}i "Ombra" "$prev" "${1:-system-software-update}" "${2:-A new version of Ombra is available}" \
+        "${3:-Click here, or open Update Ombra from the application menu. Updates need Persistent mode.}" \
         2 default "Update Ombra" 0 0 2>/dev/null | awk '{print $2}' > "$IDFILE"
 }
 
-told=0
+told=0; warned=0
 while :; do
-    if [ "$(head -n1 /run/ombra/update 2>/dev/null)" = available ]; then
+    state=$(head -n1 /run/ombra/update 2>/dev/null)
+    if [ "$state" = available ]; then
         if [ "$told" -eq 0 ] || [ "$told" -ge 1080 ]; then notify; told=0; fi
         told=$((told + 1))
     else
         told=0
+    fi
+    # a failed signature check is said once per session (until the state changes): nothing was installed
+    if [ "$state" = invalid ]; then
+        [ "$warned" -eq 1 ] || notify dialog-warning "Ombra could not verify an update list" \
+            "Its signature check failed; the server or the connection may be tampered with. Nothing was installed. Click for details."
+        warned=1
+    else
+        warned=0
     fi
     sleep 20
 done

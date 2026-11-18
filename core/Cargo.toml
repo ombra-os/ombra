@@ -32,8 +32,10 @@ path = "src/bin/ombra-torctl-filter.rs"
 [dependencies]
 libc = "0.2"
 anyhow = "1"
-crossterm = "0.28"
-ratatui = "0.29"
+crossterm = "0.29"
+# 0.30 defaults add calendar/macros widgets we never use; underline-color still arrives via
+# ratatui-crossterm's defaults (naming it here drags termwiz/termina into Cargo.lock).
+ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29", "layout-cache"] }
 zeroize = "1"
 # fb face only: pure-Rust glyph rasterizer.
 fontdue = { version = "0.9", default-features = false, features = ["hashbrown"] }
@@ -43,3 +45,5 @@ serde_json = "1"
 
 [profile.release]
 strip = true
+# arithmetic wraps are bugs: panic (unwind) instead of computing a wrong length
+overflow-checks = true

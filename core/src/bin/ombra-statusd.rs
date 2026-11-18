@@ -10,8 +10,9 @@ usage: ombra-statusd [--once | --probe] [--socket PATH] [--cache PATH]
 
   (default)   daemon: serve one JSON status line per connection on the
               status socket ($XDG_RUNTIME_DIR/ombra-status.sock, fallback
-              /tmp/ombra-status-$UID.sock), probes refreshed at most
-              once per 30 s in the background
+              /tmp/ombra-status-$UID.sock), probes refreshed every 30 s in the
+              background (Tor circuits via the gateway; the exit itself
+              re-checked every 15 min)
   --once      print one JSON status line to stdout; probe only if the
               cache is stale (TTL 30 s); honors OMBRA_STATUS_FORCE_CACHE
   --probe     print one JSON status line; always fresh probes, no cache
@@ -115,13 +116,13 @@ fn run(mode: Mode) -> anyhow::Result<()> {
             let cache = cache.unwrap_or_else(status::default_cache_path);
             let force =
                 status::env_forces_cache(std::env::var_os(status::FORCE_CACHE_ENV).as_deref());
-            let mut probes = ExecProbes;
+            let mut probes = ExecProbes::default();
             let snap = status::once_snapshot(&mut probes, &cache, status::now_unix(), force);
             println!("{}", snap.to_json());
             Ok(())
         }
         Mode::Probe => {
-            let mut probes = ExecProbes;
+            let mut probes = ExecProbes::default();
             let snap = status::refresh(&mut probes);
             println!("{}", snap.to_json());
             Ok(())
@@ -151,18 +152,16 @@ mod tests {
     #[test]
     fn flags_pick_their_modes_and_overrides() {
         let mode = parse_args(args(&["--socket", "/tmp/x.sock"])).unwrap();
-        assert!(
-            matches!(mode, Mode::Daemon { socket: Some(p), .. } if p == PathBuf::from("/tmp/x.sock"))
-        );
+        assert!(matches!(mode, Mode::Daemon { socket: Some(p), .. } if p == *"/tmp/x.sock"));
 
         assert!(matches!(parse_args(args(&["--probe"])), Ok(Mode::Probe)));
 
         let mode = parse_args(args(&["--once", "--cache", "/tmp/c.json"])).unwrap();
-        assert!(matches!(mode, Mode::Once { cache: Some(p) } if p == PathBuf::from("/tmp/c.json")));
+        assert!(matches!(mode, Mode::Once { cache: Some(p) } if p == *"/tmp/c.json"));
 
         // flag order does not matter
         let mode = parse_args(args(&["--cache", "/tmp/c.json", "--once"])).unwrap();
-        assert!(matches!(mode, Mode::Once { cache: Some(p) } if p == PathBuf::from("/tmp/c.json")));
+        assert!(matches!(mode, Mode::Once { cache: Some(p) } if p == *"/tmp/c.json"));
 
         assert!(matches!(parse_args(args(&["-h"])), Ok(Mode::Help)));
     }

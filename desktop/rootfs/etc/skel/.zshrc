@@ -1,4 +1,4 @@
-# ~/.zshrc — the interactive shell (system /etc/zsh/zshrc runs the ombra panel on the first terminal of a session).
+# ~/.zshrc — the interactive shell (system /etc/zsh/zshrc is empty; `ombra`, the connectivity panel, is a manual command).
 
 # ---- history ---------------------------------------------------------------
 HISTFILE="$HOME/.zsh_history"
@@ -63,5 +63,5 @@ alias tree='eza --tree --icons'
 alias cat='bat --paging=never'
 alias grep='rg'
 
-# ombra: connectivity panel on demand (it also greets each session)
+# ombra: connectivity panel on demand (nothing runs it at shell start)
 alias ombra='/usr/local/bin/ombra'

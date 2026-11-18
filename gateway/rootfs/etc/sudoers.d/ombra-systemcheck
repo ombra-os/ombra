@@ -1,3 +1,6 @@
-# the console auto-login triggers the boot health report without a password prompt — this ONE command only.
+# the console user can re-run the tty1 health splash without a password prompt (nothing triggers it automatically).
 # Plain start, NOT --wait: with RemainAfterExit=yes, --wait never returns and the login shell hangs.
 ombra ALL=(root) NOPASSWD: /usr/bin/systemctl start ombra-systemcheck.service
+# the full report (its root-only checks) on demand: `sudo ombra-systemcheck`, no arguments, clean environment
+Defaults!/usr/local/sbin/ombra-systemcheck env_reset
+ombra ALL=(root) NOPASSWD: /usr/local/sbin/ombra-systemcheck ""

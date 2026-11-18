@@ -29,20 +29,11 @@ bindkey '^[[B' history-search-forward
 
 # ---- modern CLI wiring ------------------------------------------------------
 command -v starship >/dev/null && eval "$(starship init zsh)"
-command -v zoxide    >/dev/null && eval "$(zoxide init zsh)"
-[ -f /usr/share/doc/fzf/examples/key-bindings.zsh ] && \
-    source /usr/share/doc/fzf/examples/key-bindings.zsh
-[ -f /usr/share/doc/fzf/examples/completion.zsh ] && \
-    source /usr/share/doc/fzf/examples/completion.zsh
 
 # ---- small, opinionated defaults -------------------------------------------
-alias ls='eza --group-directories-first --icons'
-alias ll='eza -l --group-directories-first --icons --git'
-alias la='ll -a'
-alias tree='eza --tree --icons'
-alias cat='bat --paging=never'
-alias grep='rg'
-# cd keeps working; zoxide's `z` jumps to frequent dirs
+alias ls='ls --color=auto --group-directories-first'
+alias ll='ls -lh'
+alias la='ll -A'
 
 # ombra: connectivity panel on demand (it also greets each session)
 alias ombra='/usr/local/bin/ombra'

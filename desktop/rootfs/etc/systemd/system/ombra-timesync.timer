@@ -3,7 +3,7 @@ Description=Periodic ombra-timesync on the desktop (clock free-runs; host pauses
 
 [Timer]
 OnBootSec=2min
-OnUnitInactiveSec=30min
+OnUnitInactiveSec=5min
 AccuracySec=15s
 Unit=ombra-timesync.service
 

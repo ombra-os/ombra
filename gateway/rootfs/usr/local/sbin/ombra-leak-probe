@@ -50,9 +50,9 @@ say '==== ombra gateway leak tests (root) ===='
 say '[1/7] non-tor egress fails (ombra -> internet must be REFUSED, not timed out)'
 reject_before=$(nft list chain inet filter output | grep 'reject comment' | grep -oE 'packets [0-9]+' | grep -oE '[0-9]+' | head -1)
 
-as_user ombra 'curl --connect-timeout 8 -sS -o /dev/null https://check.torproject.org/' >/dev/null 2>&1
+as_user ombra 'curl -q --connect-timeout 8 -sS -o /dev/null https://check.torproject.org/' >/dev/null 2>&1
 rc1a=$?
-as_user ombra 'curl --connect-timeout 8 -sS -o /dev/null http://deb.debian.org/debian/' >/dev/null 2>&1
+as_user ombra 'curl -q --connect-timeout 8 -sS -o /dev/null http://deb.debian.org/debian/' >/dev/null 2>&1
 rc1b=$?
 
 reject_after=$(nft list chain inet filter output | grep 'reject comment' | grep -oE 'packets [0-9]+' | grep -oE '[0-9]+' | head -1)
@@ -230,7 +230,8 @@ is_allowed() {
         "tcp 10.55.10.1:53")               return 0 ;;  # dnsmasq DNS for the desktop
         "udp 10.55.10.1:53")               return 0 ;;  # dnsmasq DNS for the desktop
         "udp "*"%ombra-upstream:68")       return 0 ;;  # dhclient on the upstream NIC (any host subnet)
-        "tcp 10.55.10.1:9050")             return 0 ;;  # tor SocksPort (desktop)
+        "tcp 10.55.10.1:9050")             return 0 ;;  # tor SocksPort (desktop apps)
+        "tcp 10.55.10.1:9150")             return 0 ;;  # tor SocksPort (desktop Tor Browser)
         "tcp 10.55.10.1:9040")             return 0 ;;  # tor TransPort (transparent proxy)
         "tcp 10.55.10.1:9052")             return 0 ;;  # ombra-torctl-filter (read-only control)
         "tcp 127.0.0.1:9050")              return 0 ;;  # tor SocksPort (local harness)
@@ -303,7 +304,7 @@ if [ "$FUSER" != "ombra-torctl" ]; then
     evid "running as: ${FUSER:-not running}"
     t7_ok=0
 fi
-as_user ombra-torctl 'curl --connect-timeout 8 -sS -o /dev/null https://check.torproject.org/' >/dev/null 2>&1
+as_user ombra-torctl 'curl -q --connect-timeout 8 -sS -o /dev/null https://check.torproject.org/' >/dev/null 2>&1
 rc7=$?
 if [ "$rc7" -ne 7 ]; then
     say '      FAIL: ombra-torctl egress was not refused (curl exit not 7)'

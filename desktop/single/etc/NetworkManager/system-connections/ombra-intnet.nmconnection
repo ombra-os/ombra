@@ -1,0 +1,19 @@
+# The single edition's link to the gateway container: STATIC by design, 10.55.10.100,
+# DNS = the container's dnsmasq (Tor-only upstream), IPv6 disabled.
+# Bound to the veth ombra-gw by name: the VM's own NIC (ombra-nic) belongs to the container
+# and must never match this profile. NM requires mode 600 root-owned.
+[connection]
+id=ombra-intnet
+type=ethernet
+interface-name=ombra-gw
+autoconnect=true
+autoconnect-priority=100
+
+[ipv4]
+method=manual
+address1=10.55.10.100/24,10.55.10.1
+dns=10.55.10.1;
+never-default=false
+
+[ipv6]
+method=disabled

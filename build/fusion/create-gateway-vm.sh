@@ -72,7 +72,7 @@ PYEOF
 verify() {
   if [ -z "$VMX" ]; then
       echo "locating a gateway vmx in $VMDIR ..."
-      VMX="$( "$VMDIR"/*.vmwarevm/*.vmx 2>/dev/null | head -1)"
+      VMX="$(ls -1 "$VMDIR"/ombra-gateway*.vmwarevm/*.vmx 2>/dev/null | head -1)"
   fi
   if [ -z "$VMX" ] || [ ! -f "$VMX" ]; then
       echo "FATAL: no ombra-gateway vmx found in $VMDIR — pass the vmx path" >&2
@@ -98,6 +98,7 @@ verify() {
       bad "NIC2 missing — Add Device -> Network Adapter in the UI, then re-run --verify"
   fi
   check_eq "time sync OFF (Tor owns time)" tools.syncTime      FALSE "$VMX" FALSE
+  check_eq "RTC is UTC (Fusion default is host local time: hours of skew and a timezone tell)" rtc.diffFromUTC 0 "$VMX" 0
   check_eq "vmci present (vmrun needs it)" vmci0.present TRUE "$VMX" TRUE
   check_eq "3D OFF (headless)"             mks.enable3d       FALSE "$VMX" FALSE
   check_eq "no .vmem backing file"         mainMem.useNamedFile FALSE "$VMX" FALSE
@@ -135,7 +136,11 @@ verify() {
 
   echo
   if [ "$FAILS" -gt 0 ]; then
-      echo "RESULT: $FAILS FAIL(S)${FIXMODE:+ remaining — device-tree items need the UI}"
+      if [ "$FIXMODE" = 1 ]; then
+          echo "RESULT: $FAILS FAIL(S) remaining — device-tree items need the UI"
+      else
+          echo "RESULT: $FAILS FAIL(S)"
+      fi
       exit 1
   fi
   echo "RESULT: all settings verified — boot it."

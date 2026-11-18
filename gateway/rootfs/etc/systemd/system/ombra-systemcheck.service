@@ -1,6 +1,7 @@
 [Unit]
-# Boot face: ombra-splash on tty1, via the console auto-login hook and
-# the +20s timer as a no-op fallback. Detailed report: sudo ombra-systemcheck.
+# Console face: ombra-splash on tty1. Nothing starts it automatically (no
+# [Install], no timer, no login hook): `sudo systemctl start
+# ombra-systemcheck.service` on demand. Detailed report: sudo ombra-systemcheck.
 Description=Ombra gateway console splash (boot health verdict)
 
 [Service]
@@ -14,4 +15,5 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
-TimeoutStartSec=240
+# worst case: 150s Tor wait + 65s resolve + 18s onion + 120s SOCKS + 8s egress
+TimeoutStartSec=420

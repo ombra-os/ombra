@@ -1,6 +1,9 @@
 [Unit]
 Description=KActivities recording database on volatile tmpfs (nothing persists)
 After=home.mount
+# kact-wipe verifies, as the user, that the path holds no symlink; systemd also refuses a non-canonical Where= (ELOOP)
+Requires=kact-wipe.service
+After=kact-wipe.service
 
 [Mount]
 What=tmpfs

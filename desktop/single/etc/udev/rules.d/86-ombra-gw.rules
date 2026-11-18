@@ -1,0 +1,2 @@
+# the link to the gateway container is a veth, which NetworkManager leaves unmanaged by default
+ACTION=="add|change", SUBSYSTEM=="net", KERNEL=="ombra-gw", ENV{NM_UNMANAGED}="0"

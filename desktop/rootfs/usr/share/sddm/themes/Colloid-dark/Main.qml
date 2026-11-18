@@ -206,12 +206,6 @@ Item {
                 actionItemsVisible: !inputPanel.keyboardActive
                 actionItems: [
                     ActionButton {
-                        icon.name: "/usr/share/sddm/themes/Colloid-dark/assets/suspend_primary.svgz"
-                        text: i18ndc("plasma-desktop-sddm-theme", "Suspend to RAM", "Sleep")
-                        onClicked: sddm.suspend()
-                        enabled: sddm.canSuspend
-                    },
-                    ActionButton {
                         icon.name: "/usr/share/sddm/themes/Colloid-dark/assets/restart_primary.svgz"
                         text: i18nd("plasma-desktop-sddm-theme", "Restart")
                         onClicked: sddm.reboot()
@@ -222,12 +216,6 @@ Item {
                         text: i18nd("plasma-desktop-sddm-theme", "Shut Down")
                         onClicked: sddm.powerOff()
                         enabled: sddm.canPowerOff
-                    },
-                    ActionButton {
-                        icon.name: "/usr/share/sddm/themes/Colloid-dark/assets/switch_primary.svgz"
-                        text: i18ndc("plasma-desktop-sddm-theme", "For switching to a username and password prompt", "Other…")
-                        onClicked: mainStack.push(userPromptComponent)
-                        visible: !userListComponent.showUsernamePrompt
                     }]
 
                 onLoginRequest: {
@@ -344,12 +332,6 @@ Item {
 
                 actionItemsVisible: !inputPanel.keyboardActive
                 actionItems: [
-                    ActionButton {
-                        icon.name: "/usr/share/sddm/themes/Colloid-dark/assets/suspend_primary.svgz"
-                        text: i18ndc("plasma-desktop-sddm-theme", "Suspend to RAM", "Sleep")
-                        onClicked: sddm.suspend()
-                        enabled: sddm.canSuspend
-                    },
                     ActionButton {
                         icon.name: "/usr/share/sddm/themes/Colloid-dark/assets/restart_primary.svgz"
                         text: i18nd("plasma-desktop-sddm-theme", "Restart")

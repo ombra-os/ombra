@@ -1,7 +1,7 @@
 [SddmGreeterTheme]
 Name=Ombra
 Description=Ombra login theme
-Author=Ombra
+Author=Vince Liuice (Colloid-kde), modified for Ombra
 License=GPL-3.0-or-later
 Type=sddm-theme
 Version=0.1

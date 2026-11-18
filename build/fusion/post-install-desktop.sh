@@ -1,11 +1,17 @@
 #!/bin/bash
 # host-side finish pass after the desktop installer powers off: NIC1 to intnet (pinned MAC), CD becomes an
 # empty raw drive, disk-first boot order, install-time VNC keys stripped. Idempotent.
-# Usage: post-install-desktop.sh [vmx-path] [--no-start]
+# OMBRA_EDITION=single: the one-VM edition (ombra-single); its NIC stays on NAT (the gateway container owns it).
+# Usage: [OMBRA_EDITION=single] post-install-desktop.sh [vmx-path] [--no-start]
 
 set -eu
 
-VMX="${HOME}/Virtual Machines.localized/ombra-desktop.vmwarevm/ombra-desktop.vmx"
+case "${OMBRA_EDITION:-two-vm}" in
+  two-vm) VM_NAME=ombra-desktop ;;
+  single) VM_NAME=ombra-single ;;
+  *) printf 'FATAL: OMBRA_EDITION must be two-vm or single (got %s)\n' "$OMBRA_EDITION" >&2; exit 2 ;;
+esac
+VMX="${HOME}/Virtual Machines.localized/$VM_NAME.vmwarevm/$VM_NAME.vmx"
 START=1
 for arg in "$@"; do
   case "$arg" in
@@ -40,7 +46,18 @@ vmx_set() { # <key-lower> <value>
   fi
 }
 
-vmx_set ethernet0.connectionType hostonly   # NAT -> "Private to my Mac" (vmnet1)
+# the edition must match the VM: a single-edition VM moved to the private link would have no way out at all, and a
+# two-VM desktop left on NAT would sit on the Mac's network with no gateway in its path
+case "$(grep -i '^displayName *=' "$VMX" | head -1 | cut -d'"' -f2)" in
+  ombra-single*) [ "$VM_NAME" = ombra-single ] || { printf 'FATAL: %s is a single-edition VM: run with OMBRA_EDITION=single\n' "$VMX" >&2; exit 2; } ;;
+  *) [ "$VM_NAME" = ombra-desktop ] || { printf 'FATAL: %s is not a single-edition VM (displayName ombra-single*)\n' "$VMX" >&2; exit 2; } ;;
+esac
+
+if [ "$VM_NAME" = ombra-single ]; then
+  vmx_set ethernet0.connectionType nat      # stays NAT: the gateway container's upstream
+else
+  vmx_set ethernet0.connectionType hostonly # NAT -> "Private to my Mac" (vmnet1)
+fi
 vmx_set sata0:0.deviceType        cdrom-raw # image -> empty physical drive
 vmx_set sata0:0.fileName          "auto detect"
 vmx_set sata0:0.startConnected    false     # no media at any boot, ever
@@ -61,9 +78,18 @@ if [ "$START" = 1 ]; then
   "$VMRUN" -T fusion start "$VMX" gui >/dev/null 2>&1 \
     || { printf 'FATAL: vmrun start failed — open the VM in Fusion and press Play\n' >&2; exit 1; }
 fi
-if [ "$START" = 1 ]; then
-  printf 'desktop started: intnet-only (via gateway), empty CD, disk-first\n'
+if [ "$VM_NAME" = ombra-single ]; then
+  LINK="NAT owned by the gateway container"
 else
-  printf 'desktop vmx finished (not started): intnet-only (via gateway), empty CD, disk-first\n'
+  LINK="intnet-only (via gateway)"
 fi
-printf 'console: first boot = ombra-welcome (set disk passphrase + password)\n'
+if [ "$START" = 1 ]; then
+  printf '%s started: %s, empty CD, disk-first\n' "$VM_NAME" "$LINK"
+else
+  printf '%s vmx finished (not started): %s, empty CD, disk-first\n' "$VM_NAME" "$LINK"
+fi
+if [ "$VM_NAME" = ombra-single ]; then
+  printf 'console: every boot = the unlock screen (the passphrase chosen at install); no first-use screen in this edition\n'
+else
+  printf 'console: first boot = ombra-welcome (set disk passphrase + password)\n'
+fi

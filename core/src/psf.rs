@@ -200,7 +200,7 @@ pub fn load(console_fd: RawFd) -> Result<String, String> {
 
     // KDFONTOP: rows go at the top of each 32-row slot; wrong stride = scrambled font.
     let count = font.glyph_count;
-    let bytewidth = ((font.width + 7) / 8) as usize;
+    let bytewidth = font.width.div_ceil(8) as usize;
     let kcharsize = KERNEL_VPITCH * bytewidth;
     let mut buf = vec![0u8; kcharsize * count.max(128)];
     for (i, glyph) in font.glyphs.chunks(font.glyph_bytes).enumerate() {

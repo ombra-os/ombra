@@ -48,11 +48,23 @@ case "$NAME" in
     check "ethernet1 is hostonly" '[ "$(vmx_get ethernet1.connectionType)" = "hostonly" ]' ;;
   *desktop*)
     check "ethernet0 is hostonly" '[ "$(vmx_get ethernet0.connectionType)" = "hostonly" ]' ;;
+  # the single edition ships only as its installer ISO, never as a VM bundle
   *) check "archive name contains gateway or desktop" 'false' ;;
 esac
-for key in isolation.tools.copy.disable isolation.tools.paste.disable isolation.tools.dnd.disable isolation.tools.hgfs.disable isolation.tools.setGUIOptions.enable; do
-  check "$key present" '[ -n "$(vmx_get "$key")" ]'
+upper() { tr '[:lower:]' '[:upper:]'; }
+for key in isolation.tools.copy.disable isolation.tools.paste.disable isolation.tools.dnd.disable isolation.tools.hgfs.disable; do
+  check "$key is TRUE" '[ "$(vmx_get "$key" | upper)" = TRUE ]'
 done
+check "isolation.tools.setGUIOptions.enable is FALSE" '[ "$(vmx_get isolation.tools.setGUIOptions.enable | upper)" = FALSE ]'
+check "time sync with the host is off" '[ "$(vmx_get tools.syncTime | upper)" = FALSE ]'
+check "the clock is presented in UTC (rtc.diffFromUTC = 0)" '[ "$(vmx_get rtc.diffFromUTC)" = 0 ]'
+check "the installer CD is an empty drive" '[ "$(vmx_get sata0:0.deviceType)" = cdrom-raw ]'
+NICS="$(grep -ciE '^ethernet[0-9]+\.present *= *"true"' "$VMX" || true)"
+case "$NAME" in
+  *gateway*) check "exactly two network adapters" '[ "$NICS" = 2 ]'
+             check "the headless gateway has no sound card" '[ "$(vmx_get sound.present | upper)" != TRUE ]' ;;
+  *desktop*) check "exactly one network adapter" '[ "$NICS" = 1 ]' ;;
+esac
 
 check "no builder residue files (locks, logs, plists, memory, snapshots)" \
   '[ -z "$(find "$BUNDLE" \( -name "*.lck" -o -name "*.log" -o -name "*.plist" -o -name "*.vmem" -o -name "*.vmss" -o -name "*.vmsn" -o -name "*.vmsd" -o -name "*.bak" \) | head -1)" ]'

@@ -1,7 +1,8 @@
 //! Keyscript mode: cryptroot invokes once per passphrase attempt; the passphrase is one line on STDOUT, the TUI on /dev/tty1.
 
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read as _, Write};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -34,6 +35,118 @@ pub fn bump_attempts(marker: &Path) -> io::Result<u32> {
     }
     fs::write(marker, format!("{}\n", prev + 1))?;
     Ok(prev)
+}
+
+// ---- the in-boot "build key is dead" record (keyscript writes, setup gate reads) ----
+
+/// Root-only record: THIS boot's keyscript got cryptsetup's "no key matches" (exit 2) for the build key.
+pub const DEAD_RECORD: &str = "/run/ombra/gate/build-key-dead";
+pub const BOOT_ID: &str = "/proc/sys/kernel/random/boot_id";
+
+/// The record binds the verdict to one boot and one block device (st_rdev).
+pub fn dead_record_body(boot_id: &str, rdev: u64) -> Option<String> {
+    let id = boot_id.trim();
+    if id.is_empty() || id.contains(char::is_whitespace) {
+        return None;
+    }
+    Some(format!("boot {id} dev {rdev}\n"))
+}
+
+/// This boot's body for `device`; None unless the boot id reads and `device` is a block device.
+pub fn dead_record_body_for(device: &Path) -> Option<String> {
+    let m = fs::metadata(device).ok()?;
+    if !m.file_type().is_block_device() {
+        return None;
+    }
+    dead_record_body(&fs::read_to_string(BOOT_ID).ok()?, m.rdev())
+}
+
+/// Only exit 2 is recorded; every other outcome clears the record so it can never vouch for a live key.
+pub fn note_build_key_test(record: &Path, exit: Option<i32>, body: Option<&str>) -> bool {
+    let dead = exit == Some(2);
+    let written = match (dead, body) {
+        (true, Some(b)) => write_dead_record(record, b).is_ok(),
+        _ => false,
+    };
+    if !written {
+        let _ = fs::remove_file(record);
+    }
+    dead
+}
+
+/// Dir 0700, file 0600, created fresh (never through a symlink).
+pub fn write_dead_record(record: &Path, body: &str) -> io::Result<()> {
+    let dir = record
+        .parent()
+        .ok_or_else(|| io::Error::other("record path has no directory"))?;
+    if let Some(up) = dir.parent() {
+        fs::create_dir_all(up)?;
+    }
+    match fs::DirBuilder::new().mode(0o700).create(dir) {
+        Err(e) if e.kind() != io::ErrorKind::AlreadyExists => return Err(e),
+        _ => {}
+    }
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
+    let _ = fs::remove_file(record);
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(record)?;
+    f.write_all(body.as_bytes())
+}
+
+/// True only for a regular, single-link file owned by `owner` with no group/other bits, in a dir with the same
+/// rule, on tmpfs, whose body is exactly `want`. Anything else means "derive".
+pub fn dead_record_holds(
+    record: &Path,
+    want: &str,
+    owner: u32,
+    on_tmpfs: &dyn Fn(&fs::File) -> bool,
+) -> bool {
+    let private = |m: &fs::Metadata| m.uid() == owner && m.mode() & 0o077 == 0;
+    let Some(dir) = record.parent() else {
+        return false;
+    };
+    match fs::symlink_metadata(dir) {
+        Ok(m) if m.is_dir() && private(&m) => {}
+        _ => return false,
+    }
+    // O_NOFOLLOW: a symlink fails the open; O_NONBLOCK: a fifo cannot wedge the gate
+    let Ok(f) = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(record)
+    else {
+        return false;
+    };
+    match f.metadata() {
+        Ok(m) if m.file_type().is_file() && m.nlink() == 1 && private(&m) => {}
+        _ => return false,
+    }
+    if !on_tmpfs(&f) {
+        return false;
+    }
+    let mut body = String::new();
+    f.take(256).read_to_string(&mut body).is_ok() && body == want
+}
+
+/// A record on a disk-backed /run could outlive its boot: only tmpfs counts.
+#[cfg(target_os = "linux")]
+pub fn on_tmpfs(f: &fs::File) -> bool {
+    use std::os::unix::io::AsRawFd as _;
+    const TMPFS_MAGIC: u64 = 0x0102_1994;
+    // SAFETY: statfs is plain data; fstatfs only writes into it.
+    let mut s: libc::statfs = unsafe { std::mem::zeroed() };
+    #[allow(clippy::unnecessary_cast)] // f_type's width differs per libc
+    let ok = unsafe { libc::fstatfs(f.as_raw_fd(), &mut s) } == 0 && s.f_type as u64 == TMPFS_MAGIC;
+    ok
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn on_tmpfs(_f: &fs::File) -> bool {
+    false
 }
 
 /// Key goes to stdout as EXACT bytes, NO trailing newline.
@@ -82,9 +195,13 @@ pub fn run(
     };
 
     // a set-up machine skips the doomed build-key attempt: straight to the prompt
-    if attempt == 1 && build_key_dead() {
-        let _ = fs::write(marker, "2\n");
-        attempt = 2;
+    if attempt == 1 {
+        // the splash is up during the slow test, never a bare console
+        ui.draw_splash(0);
+        if build_key_dead() {
+            let _ = fs::write(marker, "2\n");
+            attempt = 2;
+        }
     }
 
     if attempt == 1 {
@@ -111,8 +228,9 @@ pub fn run(
             }
         });
         ui.draw_unlock(&field, message);
-        match ui.next_key()? {
-            Some(key) => match field.handle_key(key) {
+        // no key: static caret, nothing to blink
+        if let Some(key) = ui.next_key()? {
+            match field.handle_key(key) {
                 FieldEvent::Submitted => {
                     let mut secret = field.take();
                     let sent = write_key(stdout, secret.as_bytes());
@@ -124,8 +242,7 @@ pub fn run(
                 FieldEvent::TooShort => feedback = Some(TOO_SHORT_MESSAGE),
                 FieldEvent::Edited => feedback = None,
                 FieldEvent::Ignored => {}
-            },
-            None => {} // static caret: nothing to blink
+            }
         }
     }
 }
@@ -133,7 +250,9 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
     use std::collections::VecDeque;
+    use std::rc::Rc;
 
     use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -157,6 +276,8 @@ mod tests {
         /// Field state at the FIRST draw: must be empty on every re-invocation.
         first_draw_empty: Option<bool>,
         last_message: Option<String>,
+        /// Draws in order, shared with a test's build-key closure.
+        log: Rc<RefCell<Vec<&'static str>>>,
     }
 
     impl FakeUi {
@@ -167,6 +288,7 @@ mod tests {
                 unlock_draws: 0,
                 first_draw_empty: None,
                 last_message: None,
+                log: Rc::default(),
             }
         }
         fn typed(s: &str) -> Vec<KeyEvent> {
@@ -179,9 +301,11 @@ mod tests {
     impl KeyscriptUi for FakeUi {
         fn draw_splash(&mut self, _pulse: usize) {
             self.splash_draws += 1;
+            self.log.borrow_mut().push("splash");
         }
         fn draw_unlock(&mut self, field: &SecretField, message: Option<(&str, Severity)>) {
             self.unlock_draws += 1;
+            self.log.borrow_mut().push("unlock");
             if self.first_draw_empty.is_none() {
                 self.first_draw_empty = Some(field.is_empty());
             }
@@ -191,7 +315,7 @@ mod tests {
             self.keys
                 .pop_front()
                 .map(Some)
-                .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "key script exhausted"))
+                .ok_or_else(|| io::Error::other("key script exhausted"))
         }
         fn tick_wait(&mut self, _d: Duration) {}
     }
@@ -212,7 +336,8 @@ mod tests {
         keyscript_run_for_test(&marker, &mut out, &mut ui, Duration::ZERO).unwrap();
 
         assert_eq!(out, b"ombra-disk");
-        assert_eq!(ui.splash_draws, 0);
+        // only the pre-test splash frame: a zero splash animates nothing
+        assert_eq!(ui.splash_draws, 1);
         assert_eq!(ui.unlock_draws, 0);
         assert_eq!(read_attempts(&marker), 1);
     }
@@ -233,7 +358,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out, b"sardines1");
-        assert_eq!(ui.splash_draws, 0);
+        assert_eq!(ui.splash_draws, 1, "one static frame while the test runs");
         assert_eq!(ui.last_message, None);
         assert_eq!(read_attempts(&marker), 2);
     }
@@ -246,7 +371,8 @@ mod tests {
         let mut ui = FakeUi::scripted(vec![]);
         keyscript_run_for_test(&marker, &mut out, &mut ui, Duration::from_millis(1100)).unwrap();
         let want = Duration::from_millis(1100).as_millis() as usize / theme::PULSE_MS as usize;
-        assert_eq!(ui.splash_draws, want);
+        // + the frame drawn before the build-key test
+        assert_eq!(ui.splash_draws, want + 1);
         assert_eq!(out, b"ombra-disk");
     }
 
@@ -387,6 +513,223 @@ mod tests {
             &["ombra-askpass".to_string(), "--quiet".to_string()],
             false
         ));
+    }
+
+    #[test]
+    fn the_splash_is_drawn_before_the_build_key_test_then_the_prompt() {
+        let dir = tempdir("order");
+        let marker = dir.join("askpass-attempts-x");
+        let mut out: Vec<u8> = Vec::new();
+        let mut ui = FakeUi::scripted(FakeUi::typed("sardines1"));
+        let log = Rc::clone(&ui.log);
+        run(
+            &mut out,
+            &marker,
+            &mut ui,
+            "ombra-disk",
+            Duration::ZERO,
+            &mut || {
+                log.borrow_mut().push("test");
+                true
+            },
+        )
+        .unwrap();
+        let log = ui.log.borrow();
+        assert_eq!(&log[..3], ["splash", "test", "unlock"]);
+        assert!(log[3..].iter().all(|e| *e == "unlock"));
+    }
+
+    #[test]
+    fn a_later_attempt_never_runs_the_test_or_draws_the_splash() {
+        let dir = tempdir("later");
+        let marker = dir.join("askpass-attempts-x");
+        fs::write(&marker, "1\n").unwrap();
+        let mut out: Vec<u8> = Vec::new();
+        let mut ui = FakeUi::scripted(FakeUi::typed("sardines1"));
+        run(
+            &mut out,
+            &marker,
+            &mut ui,
+            "ombra-disk",
+            Duration::ZERO,
+            &mut || panic!("tested the build key on attempt two"),
+        )
+        .unwrap();
+        assert_eq!(ui.splash_draws, 0);
+    }
+
+    // ---- the dead record ----
+
+    fn uid() -> u32 {
+        unsafe { libc::getuid() }
+    }
+
+    fn tmpfs_yes(_f: &fs::File) -> bool {
+        true
+    }
+
+    /// A record dir as the keyscript leaves it, under a fresh test dir.
+    fn record_in(tag: &str) -> PathBuf {
+        tempdir(tag).join("gate").join("build-key-dead")
+    }
+
+    const BODY: &str = "boot 6f1c0a52-1b7e-4f43-9d0e-8a3c2b1d4e5f dev 64771\n";
+
+    #[test]
+    fn record_body_binds_boot_and_device_and_refuses_junk_ids() {
+        assert_eq!(
+            dead_record_body("6f1c0a52-1b7e-4f43-9d0e-8a3c2b1d4e5f\n", 64771).as_deref(),
+            Some(BODY)
+        );
+        assert_eq!(dead_record_body("", 1), None);
+        assert_eq!(dead_record_body("  \n", 1), None);
+        assert_eq!(dead_record_body("a b", 1), None);
+        assert_eq!(dead_record_body_for(Path::new("/nonexistent/dev/x")), None);
+        // a regular file is not a block device
+        let dir = tempdir("notblk");
+        let f = dir.join("f");
+        fs::write(&f, "x").unwrap();
+        assert_eq!(dead_record_body_for(&f), None);
+    }
+
+    #[test]
+    fn exit_two_writes_a_private_record_that_holds() {
+        let rec = record_in("dead2");
+        assert!(note_build_key_test(&rec, Some(2), Some(BODY)));
+        let dm = fs::metadata(rec.parent().unwrap()).unwrap();
+        assert_eq!(dm.mode() & 0o777, 0o700);
+        let fm = fs::symlink_metadata(&rec).unwrap();
+        assert_eq!(fm.mode() & 0o777, 0o600);
+        assert!(dead_record_holds(&rec, BODY, uid(), &tmpfs_yes));
+    }
+
+    #[test]
+    fn a_live_or_unknown_build_key_never_leaves_a_record() {
+        for exit in [Some(0), Some(1), Some(3), Some(-1), None] {
+            let rec = record_in("alive");
+            // even a stale record from earlier in the boot is cleared
+            write_dead_record(&rec, BODY).unwrap();
+            assert!(!note_build_key_test(&rec, exit, Some(BODY)), "{exit:?}");
+            assert!(!rec.exists(), "record survived exit {exit:?}");
+            assert!(!dead_record_holds(&rec, BODY, uid(), &tmpfs_yes));
+        }
+        // dead, but no boot/device identity: still dead for the keyscript, but nothing recorded
+        let rec = record_in("noid");
+        assert!(note_build_key_test(&rec, Some(2), None));
+        assert!(!rec.exists());
+    }
+
+    #[test]
+    fn a_live_build_key_through_run_offers_the_key_and_records_nothing() {
+        let dir = tempdir("runalive");
+        let marker = dir.join("askpass-attempts-x");
+        let rec = dir.join("gate").join("build-key-dead");
+        let mut out: Vec<u8> = Vec::new();
+        let mut ui = FakeUi::scripted(vec![]);
+        run(
+            &mut out,
+            &marker,
+            &mut ui,
+            "ombra-disk",
+            Duration::ZERO,
+            &mut || note_build_key_test(&rec, Some(0), Some(BODY)),
+        )
+        .unwrap();
+        assert_eq!(out, b"ombra-disk");
+        assert!(!rec.exists());
+    }
+
+    #[test]
+    fn a_record_for_another_boot_or_device_does_not_hold() {
+        let rec = record_in("otherboot");
+        write_dead_record(&rec, BODY).unwrap();
+        let other_boot = dead_record_body("00000000-0000-0000-0000-000000000000", 64771).unwrap();
+        let other_dev = dead_record_body("6f1c0a52-1b7e-4f43-9d0e-8a3c2b1d4e5f", 64772).unwrap();
+        assert!(!dead_record_holds(&rec, &other_boot, uid(), &tmpfs_yes));
+        assert!(!dead_record_holds(&rec, &other_dev, uid(), &tmpfs_yes));
+        assert!(dead_record_holds(&rec, BODY, uid(), &tmpfs_yes));
+    }
+
+    #[test]
+    fn a_record_off_tmpfs_or_with_the_wrong_owner_does_not_hold() {
+        let rec = record_in("owner");
+        write_dead_record(&rec, BODY).unwrap();
+        assert!(!dead_record_holds(&rec, BODY, uid(), &|_| false));
+        assert!(!dead_record_holds(
+            &rec,
+            BODY,
+            uid().wrapping_add(1),
+            &tmpfs_yes
+        ));
+    }
+
+    #[test]
+    fn a_record_with_group_or_other_bits_does_not_hold() {
+        for mode in [0o640, 0o604, 0o644, 0o660] {
+            let rec = record_in("mode");
+            write_dead_record(&rec, BODY).unwrap();
+            fs::set_permissions(&rec, fs::Permissions::from_mode(mode)).unwrap();
+            assert!(
+                !dead_record_holds(&rec, BODY, uid(), &tmpfs_yes),
+                "{mode:o}"
+            );
+        }
+        // the directory too
+        let rec = record_in("dirmode");
+        write_dead_record(&rec, BODY).unwrap();
+        fs::set_permissions(rec.parent().unwrap(), fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!dead_record_holds(&rec, BODY, uid(), &tmpfs_yes));
+    }
+
+    #[test]
+    fn a_symlinked_hardlinked_missing_or_odd_record_does_not_hold() {
+        // symlink to a perfectly good record
+        let real = record_in("symreal");
+        write_dead_record(&real, BODY).unwrap();
+        let rec = record_in("sym");
+        let dir = rec.parent().unwrap();
+        fs::DirBuilder::new().mode(0o700).create(dir).unwrap();
+        std::os::unix::fs::symlink(&real, &rec).unwrap();
+        assert!(!dead_record_holds(&rec, BODY, uid(), &tmpfs_yes));
+        // a symlinked directory
+        let rec = record_in("symdir");
+        let top = rec.parent().unwrap().parent().unwrap();
+        std::os::unix::fs::symlink(real.parent().unwrap(), top.join("gate")).unwrap();
+        assert!(!dead_record_holds(&rec, BODY, uid(), &tmpfs_yes));
+        // a second hard link
+        let rec = record_in("hard");
+        write_dead_record(&rec, BODY).unwrap();
+        fs::hard_link(&rec, rec.with_file_name("again")).unwrap();
+        assert!(!dead_record_holds(&rec, BODY, uid(), &tmpfs_yes));
+        // missing
+        let rec = record_in("missing");
+        assert!(!dead_record_holds(&rec, BODY, uid(), &tmpfs_yes));
+        // a directory in its place
+        let rec = record_in("isdir");
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .recursive(true)
+            .create(&rec)
+            .unwrap();
+        fs::set_permissions(rec.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(!dead_record_holds(&rec, BODY, uid(), &tmpfs_yes));
+        // trailing junk
+        let rec = record_in("junk");
+        write_dead_record(&rec, &format!("{BODY}x")).unwrap();
+        assert!(!dead_record_holds(&rec, BODY, uid(), &tmpfs_yes));
+    }
+
+    #[test]
+    fn writing_replaces_a_planted_symlink_instead_of_following_it() {
+        let rec = record_in("plant");
+        let dir = rec.parent().unwrap();
+        fs::DirBuilder::new().mode(0o700).create(dir).unwrap();
+        let target = dir.parent().unwrap().join("target");
+        fs::write(&target, "untouched").unwrap();
+        std::os::unix::fs::symlink(&target, &rec).unwrap();
+        write_dead_record(&rec, BODY).unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "untouched");
+        assert!(dead_record_holds(&rec, BODY, uid(), &tmpfs_yes));
     }
 
     fn keyscript_run_for_test(

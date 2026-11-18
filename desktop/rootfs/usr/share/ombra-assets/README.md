@@ -1,7 +1,7 @@
 # Vendored upstream assets — provenance, pins, licenses
 
 Everything visual on the Ombra desktop is vendored in this overlay.
-Nothing downloads at install time or at runtime: no KDE Store (the
+No visual asset downloads at install time or at runtime: no KDE Store (the
 look-and-feel metadata's `kns://` links are inert declarations that
 upstream ships, and nothing in Ombra calls them) and no Get New Stuff
 network access. The files were fetched once from the pinned upstream
@@ -21,8 +21,10 @@ the exact downloaded archives (`shasum -a 256`).
 - **Colloid-kde**: only the DARK variant is vendored (light/nord
   variants dropped). The SDDM theme is the `sddm/6.0` (Qt6 — trixie's
   sddm is a Qt6 build) variant, renamed `Colloid-dark` per upstream's
-  own installer seds, and `background.png` is OMBRA's
-  `backgrounds/ombra/ombra-02-4k.png`, not Colloid's preview image.
+  own installer seds; its background is Ombra's `background.jpg`
+  (`theme.conf`: `background=background.jpg`), not Colloid's preview
+  image. The metadata author fields read "Vince Liuice (Colloid-kde),
+  modified for Ombra".
   `contents/layouts/org.kde.plasma.desktop-layout.js` is Ombra's own
   dock layout REPLACING upstream's (same filename as upstream — the
   loader asks for `$(shell)-layout.js` exactly). The Kvantum theme is re-laid as the canonical
@@ -94,12 +96,19 @@ their sha256:
 | Shipped as | sha256 |
 |---|---|
 | `usr/share/backgrounds/ombra/ombra-01-4k.png` | `2304f951cf3624d982a181afe5acd6ecd19fe20d2c86a7e5e8f91b577be1c982` |
-| `usr/share/backgrounds/ombra/ombra-02-4k.png` (also the SDDM `background.png`) | `1e8511ddbf96f892dbb368be9f6d56322186193f5b611273362b5a1c9e4aef33` |
+| `usr/share/backgrounds/ombra/ombra-02-4k.png` | `1e8511ddbf96f892dbb368be9f6d56322186193f5b611273362b5a1c9e4aef33` |
 | `usr/share/backgrounds/ombra/ombra-dark.png` | `6f702fccdf0ebdac5995cd5cbf3c4c6efeb5c9b50878bf537ebc140222099753` |
 | `usr/share/backgrounds/ombra/ombra-grub.png` | `c6debdeebb988f3cfbb3f93deadc26866d21aba2b9e15f4a42e7e3518ef3098b` |
 | `usr/share/wallpapers/Colloid-dark/contents/images/3840x2160.png` (the default wallpaper package, named for the theme it replaces) | `b1b118c8b0e346217de39ece4919f6285de1ce2b598e1eada12fdb8b79e9e0a3` |
 
 The 4K PNGs are derived from first-party source images that are not shipped in the repository.
+
+The session, lock-screen and login wallpapers:
+
+| Shipped as | What reads it | sha256 | Origin |
+|---|---|---|---|
+| `usr/share/backgrounds/ombra/ombra-ink-4k.jpg` | Session wallpaper (look-and-feel `org.kde.plasma.desktop-layout.js`) and lock screen (`etc/skel/.config/kscreenlockerrc`) | `87c9ed4f95d6f8d6d54dbfe77a27ca7155ea79fe9a2a82a682483d358ada4292` | first-party (owner to confirm) |
+| `usr/share/sddm/themes/Colloid-dark/background.jpg` | SDDM login screen (`theme.conf`) | `7748d6f5f87b5bbb8f50959b697b7dd66c1ff93416888ea6b925ce17c66b11c6` | first-party (owner to confirm) |
 
 ## Tor Browser icon
 

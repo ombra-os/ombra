@@ -1,0 +1,6 @@
+#!/bin/sh
+# Every way of starting kitty lands here (/usr/local/bin precedes /usr/bin): menu, dock, KRunner, "Open Terminal Here".
+# On Fusion's SVGA3D device kitty draws its text near-black (measured on Mesa 25.0.7 / kitty 0.41, 2026-11-16);
+# Mesa's software renderer draws it correctly at a small CPU cost. KWin itself stays on the hardware device.
+export LIBGL_ALWAYS_SOFTWARE=1
+exec /usr/bin/kitty "$@"

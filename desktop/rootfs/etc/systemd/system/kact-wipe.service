@@ -2,14 +2,21 @@
 Description=Wipe persistent KActivities database before volatile mount
 DefaultDependencies=no
 After=home.mount systemd-remount-fs.service
+# /home is its own logical volume: never wipe (or recreate) the path on root's directory under it
+RequiresMountsFor=/home/ombra
 Before=home-ombra-.local-share-kactivitymanagerd-resources.mount
 Conflicts=shutdown.target
 Before=shutdown.target
 
+# runs as the user: every path here is under a user-owned directory, so root must never act on it (a planted symlink would redirect it)
 [Service]
 Type=oneshot
+User=ombra
+Group=ombra
 ExecStart=/bin/rm -rf /home/ombra/.local/share/kactivitymanagerd/resources
-ExecStart=/usr/bin/install -d -o ombra -g ombra -m 0755 /home/ombra/.local/share/kactivitymanagerd
+ExecStart=/bin/mkdir -p -m 0755 /home/ombra/.local/share/kactivitymanagerd
+# the root tmpfs mount must land at this literal path: a symlinked component fails this unit, and RequiredBy= keeps the mount down
+ExecStart=/bin/sh -c 'd=/home/ombra/.local/share/kactivitymanagerd; [ "$$(realpath -e "$$d")" = "$$d" ] && [ ! -L "$$d" ]'
 
 [Install]
 RequiredBy=home-ombra-.local-share-kactivitymanagerd-resources.mount

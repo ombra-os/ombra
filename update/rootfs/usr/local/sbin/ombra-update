@@ -4,40 +4,78 @@
 #
 #   check      fetch the signed release index through Tor, report if a newer version exists
 #   status     print the last check result
+#   info       print edition, role, version, boot mode and disk layout as key=value lines (no root needed)
 #   apply      download, verify and apply the update (root, Persistent mode only)
+#   security   install pending Debian updates from Debian through Tor (root, Persistent mode only; the gateway,
+#              which cannot undo them, needs --no-rollback)
 #   rollback   undo the last update (needs a reboot)
 #   commit     drop the rollback point (runs by itself ten minutes after a healthy boot)
 #
 # Trust: every file is verified against the Ed25519 key in /usr/share/ombra/update-pubkey.pem.
 # The index is signed, it names the bundle's sha256, and the bundle's own manifest is signed too.
-# Nothing is fetched except over Tor, and nothing is applied without a human running `apply`.
+# `security` trusts Debian's own archive signatures (apt's keyring), which stay fully checked.
+# Nothing is fetched except over Tor, and nothing is applied without a human running `apply` or `security`.
+#
+# Exit codes: 0 ok; 1 failed or refused, nothing was changed; 2 usage; 3 failed and was rolled back (desktop: at the
+# next restart); 4 failed and could not be rolled back; 75 the update server (or Debian) could not be reached.
+# State (first line of /run/ombra/update): available <ver> | current | applied <ver> | applied-security [restart] |
+# invalid | stale | no-index | unreachable
 
 set -u
 export LVM_SUPPRESS_FD_WARNINGS=1
 
 CONF=/etc/ombra/update.conf
 PUBKEY=/usr/share/ombra/update-pubkey.pem
+HOLD=/etc/ombra/update-hold
 STATE=/var/lib/ombra-update
 RUNDIR=/run/ombra
+LOCK=/run/ombra-update.lock
+BOOTID=/proc/sys/kernel/random/boot_id
+PROCSTAT=/proc/stat
+REBOOT_FLAG=/run/reboot-required
+BOOTDIR=/boot
+GWIMG=/var/lib/ombra/gateway.img
+GWSUM=/usr/share/ombra/gateway.img.sha256
+SAFE_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 SNAP=root-pre
 VG=vg0
+INDEX_MAX=65536
+SEC_MAX_KB=614400   # Debian downloads above 600 MB would overflow the 3 GB snapshot once unpacked
 
 BASE_URL=""
 [ -r "$CONF" ] && . "$CONF"
 ROLE=$(cat /etc/ombra/role 2>/dev/null || echo unknown)
 CURRENT=$(cat /etc/ombra/version 2>/dev/null || echo 0)
+# the single edition runs the gateway as a container inside the desktop: role stays desktop, bundles are its own
+EDITION=$( { tr -d '[:space:]' < /etc/ombra/edition; } 2>/dev/null ); EDITION=${EDITION:-two-vm}
 case "$ROLE" in
     desktop) SOCKS=10.55.10.1:9050 ;;
     gateway) SOCKS=127.0.0.1:9050 ;;
     *) echo "ombra-update: unknown role" >&2; exit 2 ;;
 esac
+# UROLE names this machine in the index and in bundle manifests; everything else keys on ROLE
+case "$EDITION:$ROLE" in
+    two-vm:*) UROLE=$ROLE ;;
+    single:desktop) UROLE=single ;;
+    *) echo "ombra-update: unknown edition" >&2; exit 2 ;;
+esac
+# apt through Tor; set with -o so it overrides apt.conf.d and nothing persistent is added to /etc/apt.
+# Signature checks are apt's defaults and are never relaxed here
+APT_OPTS="-o Acquire::http::Proxy=socks5h://$SOCKS -o Acquire::https::Proxy=socks5h://$SOCKS -o Acquire::Retries=3 -o Acquire::http::Timeout=60 -o Acquire::https::Timeout=60 -o Acquire::Languages=none -o Dpkg::Use-Pty=0"
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'ombra-update: %s\n' "$*" >&2; exit 1; }
+die_code() { c=$1; shift; printf 'ombra-update: %s\n' "$*" >&2; exit "$c"; }
 need_root() { [ "$(id -u)" = 0 ] || die "run as root (sudo ombra-update $1)"; }
+# apply, security, rollback and commit never run at the same time
+take_lock() { command exec 9>"$LOCK" && flock -n 9; }
 
-fetch() { # url dest; sets FETCH_CODE to the HTTP status; returns 1 on a transport failure, 22 on any non-200 answer
-    FETCH_CODE=$(curl -sS --max-time 600 --proto '=https' --tlsv1.2 --socks5-hostname "$SOCKS" -o "$2" -w '%{http_code}' "$1") || return 1
+fetch() { # url dest [max-bytes]; sets FETCH_CODE to the HTTP status; returns 1 on a transport failure, 22 on any non-200 answer
+    if [ -n "${3:-}" ]; then
+        FETCH_CODE=$(curl -sS --connect-timeout 60 --max-time 600 --max-filesize "$3" --proto '=https' --tlsv1.2 --socks5-hostname "$SOCKS" -o "$2" -w '%{http_code}' "$1") || { rm -f "$2"; return 1; }
+    else
+        FETCH_CODE=$(curl -sS --connect-timeout 60 --max-time 600 --proto '=https' --tlsv1.2 --socks5-hostname "$SOCKS" -o "$2" -w '%{http_code}' "$1") || { rm -f "$2"; return 1; }
+    fi
     [ "$FETCH_CODE" = 200 ] && return 0
     rm -f "$2"; return 22
 }
@@ -55,20 +93,40 @@ valid_value() { # only a conservative character set may reach a shell or a path
     return 0
 }
 
+is_num() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; return 0; }
+
 # kv <file> <key>: first value for key, empty if absent
 kv() { awk -F= -v k="$2" '$1==k { sub(/^[^=]*=/, ""); print; exit }' "$1"; }
 
 write_state() { mkdir -p "$RUNDIR"; printf '%s\n' "$@" > "$RUNDIR/update"; }
 
-fetch_index() { # sets IDX to a verified index file
+free_kb() { df -Pk "$1" | awk 'NR==2{print $4}'; }
+
+set_version() { # the version files lsb_release and os-release readers see
+    printf '%s\n' "$1" > /etc/ombra/version
+    sed -i "s/^VERSION_ID=.*/VERSION_ID=$1/" /usr/lib/os-release 2>/dev/null || true
+    sed -i "s/^DISTRIB_RELEASE=.*/DISTRIB_RELEASE=\"$1\"/" /etc/lsb-release 2>/dev/null || true
+}
+
+fetch_index() { # sets IDX to a verified index file; 1 unreachable, 2 bad signature, 3 no index published, 4 older than one already seen
     mkdir -p "$STATE"
     IDX="$STATE/latest.txt"
-    fetch "$BASE_URL/latest.txt" "$IDX.new"; c=$?
-    if [ "$c" = 22 ] && [ "$FETCH_CODE" = 404 ]; then return 3; fi   # the server answered but publishes no index (yet): nothing to update to
+    fetch "$BASE_URL/latest.txt" "$IDX.new" "$INDEX_MAX"; c=$?
+    if [ "$c" = 22 ] && [ "$FETCH_CODE" = 404 ]; then return 3; fi   # the server answered but publishes no index (yet)
     [ "$c" = 0 ] || return 1
-    fetch "$BASE_URL/latest.txt.sig" "$IDX.sig.new" || return 1
+    fetch "$BASE_URL/latest.txt.sig" "$IDX.sig.new" "$INDEX_MAX" || { rm -f "$IDX.new"; return 1; }
     verify "$IDX.new" "$IDX.sig.new" || { rm -f "$IDX.new" "$IDX.sig.new"; return 2; }
+    # replay: a signed index older than one this machine already accepted is refused; an index without `issued`
+    # is only taken while none has been seen (indexes before 1.2 carry none)
+    iss=$(kv "$IDX.new" issued); last=$(cat "$STATE/issued" 2>/dev/null)
+    is_num "$last" || last=""
+    if is_num "$iss"; then
+        [ -z "$last" ] || [ "$iss" -ge "$last" ] || { rm -f "$IDX.new" "$IDX.sig.new"; return 4; }
+    else
+        iss=""; [ -z "$last" ] || { rm -f "$IDX.new" "$IDX.sig.new"; return 4; }
+    fi
     mv "$IDX.new" "$IDX"; mv "$IDX.sig.new" "$IDX.sig"
+    [ -z "$iss" ] || printf '%s\n' "$iss" > "$STATE/issued"
     return 0
 }
 
@@ -78,14 +136,14 @@ cmd_check() {
     case "$rc" in
         0) ;;
         2) write_state "invalid"; die "the release index failed signature verification" ;;
-        3) write_state "current"; say "no release index published"; exit 0 ;;
+        3) write_state "no-index"; say "the server publishes no release index; could not check"; exit 0 ;;
+        4) write_state "stale"; say "the release index is older than one already seen; the update server may be stale"; exit 0 ;;
         *) write_state "unreachable"; exit 75 ;;
     esac
-    exp=$(kv "$IDX" expires); now=$(date +%s)
-    if valid_value "${exp:-x}" && [ "$exp" -gt 0 ] 2>/dev/null && [ "$now" -gt "$exp" ]; then
-        write_state "stale"; say "release index has expired"; exit 0
+    if index_expired; then
+        write_state "stale"; say "release index has expired (or carries no expiry)"; exit 0
     fi
-    ver=$(kv "$IDX" "$ROLE.version")
+    ver=$(kv "$IDX" "$UROLE.version")
     valid_value "${ver:-}" || { write_state "current"; exit 0; }
     if dpkg --compare-versions "$ver" gt "$CURRENT"; then
         write_state "available" "$ver"; say "update available: $ver (installed $CURRENT)"
@@ -96,115 +154,404 @@ cmd_check() {
 
 cmd_status() { cat "$RUNDIR/update" 2>/dev/null || say "unknown"; }
 
+amnesic() {
+    # Amnesic mode mounts / as an overlay on RAM over a read-only lower. The desktop picks it on the kernel line,
+    # the gateway through /etc/overlayroot.conf, so the mount itself is the test
+    [ "$(findmnt -n -o FSTYPE / 2>/dev/null)" = overlay ] && return 0
+    mountpoint -q /media/root-ro 2>/dev/null && return 0
+    grep -q 'overlayroot=tmpfs' /proc/cmdline 2>/dev/null
+}
+
 root_writable() {
-    # amnesic mode mounts / as an overlay over a read-only lower: updates must be made in Persistent mode
-    grep -q 'overlayroot=tmpfs' /proc/cmdline && return 1
+    # an overlay accepts writes, so a touch alone would let an update "succeed" into RAM and vanish at the next boot
+    amnesic && return 1
     touch /.ombra-rw-test 2>/dev/null && rm -f /.ombra-rw-test
+}
+
+home_on_root() { # images before 1.2 keep /home on the root volume, so a root rollback reverts the home folder too
+    h=$(findmnt -n -o SOURCE -T /home 2>/dev/null); r=$(findmnt -n -o SOURCE -T / 2>/dev/null)
+    h=${h%%\[*}; r=${r%%\[*}   # a bind mount shows as source[/subdir]
+    [ -z "$h" ] || [ "$h" = "$r" ]
+}
+
+cmd_info() {
+    mode=persistent; amnesic && mode=amnesic
+    hr=no; home_on_root && hr=yes
+    v=$CURRENT; valid_value "$v" || v=unknown
+    printf 'edition=%s\nrole=%s\nupdate_role=%s\nversion=%s\nmode=%s\nhome_on_root=%s\n' "$EDITION" "$ROLE" "$UROLE" "$v" "$mode" "$hr"
+}
+
+index_expired() { # IDX must be a verified index; a missing or garbled expiry counts as expired
+    exp=$(kv "$IDX" expires); now=$(date +%s)
+    is_num "$exp" || return 0
+    [ "$now" -gt "$exp" ]
+}
+
+# ---- the desktop's rollback point, shared by apply and security: an LVM snapshot of the root volume, plus copies of
+# /boot and the ESP, which are their own unencrypted partitions the snapshot does not cover (kernel, initramfs and
+# grub upgrades write there)
+
+snap_create() {
+    if lvs --noheadings -o lv_attr "$VG/root" 2>/dev/null | grep -q '^ *O'; then
+        die "a rollback is still finishing: restart once more, then try again"
+    fi
+    lvs "$VG/$SNAP" >/dev/null 2>&1 && lvremove -fy "$VG/$SNAP" >/dev/null
+    lvcreate -s -n "$SNAP" -L 3G "$VG/root" >/dev/null || die "could not create a rollback point (no free space in the volume group; if you just rolled back, restart once and try again)"
+    say "rollback point created"
+}
+
+snap_drop() { # returns 1 while the snapshot is still there
+    lvs "$VG/$SNAP" >/dev/null 2>&1 || return 0
+    # a suspended-and-resumed VM can leave the snapshot half-removed: retry, then clear whatever is left
+    lvremove -fy "$VG/$SNAP" >/dev/null 2>&1 || { sleep 2; dmsetup resume "$VG-root" >/dev/null 2>&1; lvremove -fy "$VG/$SNAP" >/dev/null 2>&1; }
+    ! lvs "$VG/$SNAP" >/dev/null 2>&1
+}
+
+boot_save() { # after snap_create, so the copies are not inside the snapshot; 1 when they could not be written
+    rm -f "$STATE/boot.tar" "$STATE/efi.tar"
+    for p in boot efi; do
+        d=$BOOTDIR; [ "$p" = efi ] && d=$BOOTDIR/efi
+        mountpoint -q "$d" 2>/dev/null || continue   # on the root volume: the snapshot covers it
+        ex=""; [ "$p" = boot ] && mountpoint -q "$BOOTDIR/efi" 2>/dev/null && ex=--exclude=./efi   # the ESP gets its own copy
+        used=$(du -skx "$d" 2>/dev/null | awk '{print $1}'); free=$(free_kb "$STATE")
+        if ! { is_num "$used" && is_num "$free" && [ "$free" -gt $((used + 262144)) ]; } \
+            || ! tar -cf "$STATE/$p.tar" --one-file-system $ex -C "$d" . 2>/dev/null; then
+            rm -f "$STATE/boot.tar" "$STATE/efi.tar"; return 1
+        fi
+    done
+}
+
+boot_restore() { # put /boot and the ESP back as they were, removing files the update added (a new kernel, its initramfs)
+    for p in boot efi; do
+        [ -f "$STATE/$p.tar" ] || continue
+        d=$BOOTDIR; [ "$p" = efi ] && d=$BOOTDIR/efi
+        mountpoint -q "$d" 2>/dev/null || { say "$d is not mounted, so it cannot be restored"; return 1; }
+        tar -tf "$STATE/$p.tar" --quoting-style=literal > "$STATE/$p.list" 2>/dev/null || { say "the saved copy of $d is unreadable"; return 1; }
+        if [ "$p" = efi ]; then   # FAT keeps no owners or modes
+            tar -xf "$STATE/$p.tar" -C "$d" --no-same-owner --no-same-permissions --warning=no-unknown-keyword 2>/dev/null
+        else
+            tar -xf "$STATE/$p.tar" -C "$d" --warning=no-unknown-keyword 2>/dev/null
+        fi || { say "restoring $d failed"; return 1; }
+        if [ "$p" = boot ] && mountpoint -q "$BOOTDIR/efi" 2>/dev/null; then set -- -path "$BOOTDIR/efi" -prune -o; else set --; fi
+        find "$d" -xdev "$@" ! -type d -print | while IFS= read -r f; do printf './%s\n' "${f#"$d"/}"; done \
+            | awk 'NR==FNR { k[$0]; next } !($0 in k)' "$STATE/$p.list" - \
+            | while IFS= read -r f; do rm -f "$d/${f#./}"; done
+        rm -f "$STATE/$p.list"
+    done
+}
+
+begin_change() { # from here on a failure rolls back
+    printf '%s\n' "$CURRENT" > "$STATE/previous-version"
+    # pending holds this boot's id: the commit waits for a later boot; applying stays until the change is complete
+    cat "$BOOTID" > "$STATE/pending" 2>/dev/null || : > "$STATE/pending"
+    : > "$STATE/applying"
+}
+
+# after the system was touched: roll back, and say honestly how that went
+fail_applied() {
+    say "$1"
+    if cmd_rollback_now; then
+        if [ "$ROLE" = desktop ]; then
+            if home_on_root; then
+                die_code 3 "the update failed and was undone: restart now to return to the state before it; anything saved before that restart is lost"
+            fi
+            die_code 3 "the update failed and was undone: restart now to return to the state before it (your home folder is not affected)"
+        fi
+        die_code 3 "the update failed and the replaced files were restored; restart to finish"
+    fi
+    die_code 4 "the update failed AND could not be rolled back: the system may be half-updated. Back up your files, run 'ombra-update rollback' again, and if that fails reinstall from a fresh image"
+}
+
+gw_image_ok() { # single edition: the container's image must match the checksum shipped next to it
+    want=$(awk '{print $1; exit}' "$GWSUM" 2>/dev/null)
+    valid_value "${want:-}" && [ -f "$GWIMG" ] && [ "$(sha "$GWIMG")" = "$want" ]
 }
 
 cmd_apply() {
     need_root apply
+    take_lock || die "another ombra-update is running"
     root_writable || die "this boot is Amnesic (or the disk is read-only): restart in Persistent mode to update"
     [ -n "$BASE_URL" ] || die "no update URL configured"
-    [ ! -e "$STATE/pending" ] || die "an update is already waiting for a restart or a commit; run: ombra-update commit"
-    fetch_index || die "could not fetch a verified release index (is Tor up?)"
-    ver=$(kv "$IDX" "$ROLE.version"); path=$(kv "$IDX" "$ROLE.bundle"); want=$(kv "$IDX" "$ROLE.sha256")
+    [ ! -e "$STATE/applying" ] || die "the last update did not finish: run ombra-update rollback first"
+    [ ! -e "$STATE/pending" ] || die "an update is already waiting for a restart or a commit: restart first (it commits ten minutes after a healthy boot), or run ombra-update rollback"
+    rc=0; fetch_index || rc=$?
+    case "$rc" in
+        0) ;;
+        2) write_state "invalid"; die "the release index failed signature verification" ;;
+        4) write_state "stale"; die "the release index is older than one already seen; the update server may be stale, try again later" ;;
+        *) die "could not fetch a verified release index (is Tor up?)" ;;
+    esac
+    # an old signed index replayed by the download host must not steer an apply either
+    ! index_expired || die "the release index has expired; the update server may be stale, try again later"
+    ver=$(kv "$IDX" "$UROLE.version"); path=$(kv "$IDX" "$UROLE.bundle"); want=$(kv "$IDX" "$UROLE.sha256"); size=$(kv "$IDX" "$UROLE.size")
     valid_value "$ver" && valid_value "$path" && valid_value "$want" || die "release index is malformed"
+    is_num "$size" || size=""
     dpkg --compare-versions "$ver" gt "$CURRENT" || die "already up to date ($CURRENT)"
     say "Updating $CURRENT to $ver"
 
+    # room for the bundle and its unpacked payload (when the index names its size) plus 1 GB, before anything is downloaded
+    need=1048576; [ -z "$size" ] || need=$((need + 2 * (size / 1024 + 1)))
+    free=$(free_kb "$STATE")
+    [ "$free" -gt "$need" ] 2>/dev/null || die "not enough free space (need $((need / 1024)) MB)"
+
     B="$STATE/bundle"; rm -rf "$B"; mkdir -p "$B"
-    fetch "$BASE_URL/$path" "$B/bundle.tar" || die "download failed"
+    fetch "$BASE_URL/$path" "$B/bundle.tar" "$size" || die "download failed"
     [ "$(sha "$B/bundle.tar")" = "$want" ] || die "bundle checksum does not match the signed index"
     tar -xf "$B/bundle.tar" -C "$B" manifest manifest.sig payload.tar.gz 2>/dev/null || die "bundle is malformed"
     verify "$B/manifest" "$B/manifest.sig" || die "bundle manifest failed signature verification"
-    [ "$(kv "$B/manifest" role)" = "$ROLE" ] || die "bundle is for a different machine"
+    [ "$(kv "$B/manifest" role)" = "$UROLE" ] || die "bundle is for a different machine"
     [ "$(kv "$B/manifest" version)" = "$ver" ] || die "bundle version does not match the index"
     minfrom=$(kv "$B/manifest" min-from)
     valid_value "${minfrom:-0}" && dpkg --compare-versions "$CURRENT" ge "${minfrom:-0}" || die "this update needs version ${minfrom:-?} or newer first"
     [ "$(sha "$B/payload.tar.gz")" = "$(kv "$B/manifest" payload-sha256)" ] || die "payload does not match its signed manifest"
+    tar -tzf "$B/payload.tar.gz" > "$B/list" 2>/dev/null || die "bundle is malformed"
     # reject absolute paths and traversal before anything touches the system
-    tar -tzf "$B/payload.tar.gz" 2>/dev/null | awk '/^\// || /(^|\/)\.\.(\/|$)/ { bad=1 } END { exit bad }' || die "payload contains unsafe paths"
-
-    free=$(df -Pk "$STATE" | awk 'NR==2{print $4}')
-    [ "$free" -gt 1048576 ] || die "not enough free space (need 1 GB)"
+    awk '/^\// || /(^|\/)\.\.(\/|$)/ { bad=1 } END { exit bad }' "$B/list" || die "payload contains unsafe paths"
+    gwimg=""
+    [ "$EDITION" = single ] && sed 's#^\./##' "$B/list" | grep -qxE 'var/lib/ombra/gateway\.img|usr/share/ombra/gateway\.img\.sha256' && gwimg=1
 
     if [ "$ROLE" = desktop ]; then
-        if lvs --noheadings -o lv_attr "$VG/root" 2>/dev/null | grep -q '^ *O'; then
-            die "a rollback is still finishing: restart once more, then try again"
-        fi
-        lvs "$VG/$SNAP" >/dev/null 2>&1 && lvremove -fy "$VG/$SNAP" >/dev/null
-        lvcreate -s -n "$SNAP" -L 3G "$VG/root" >/dev/null || die "could not create a rollback point (no free space in the volume group; if you just rolled back, restart once and try again)"
-        say "rollback point created"
+        snap_create
+        boot_save || { snap_drop; die "not enough free space to keep a copy of /boot and the ESP for the rollback; nothing was changed"; }
     else
         # the gateway has no volume manager: keep the files this update replaces
-        tar -tzf "$B/payload.tar.gz" 2>/dev/null | sed 's#^\./##; s#/$##' | while IFS= read -r f; do
+        sed 's#^\./##; s#/$##' "$B/list" | while IFS= read -r f; do
             [ -n "$f" ] && [ -e "/$f" ] && [ ! -d "/$f" ] && printf '%s\n' "$f"
         done > "$STATE/replaced.list"
-        tar -tzf "$B/payload.tar.gz" 2>/dev/null | sed 's#^\./##' | grep -v '/$' | grep -v '^$' | while IFS= read -r f; do
+        sed 's#^\./##' "$B/list" | grep -v '/$' | grep -v '^$' | while IFS= read -r f; do
             [ ! -e "/$f" ] && printf '%s\n' "$f"
         done > "$STATE/added.list"
-        tar -czf "$STATE/rollback.tar.gz" -C / -T "$STATE/replaced.list" 2>/dev/null || true
-        [ -s "$STATE/rollback.tar.gz" ] || tar -czf "$STATE/rollback.tar.gz" -T /dev/null
+        if [ -s "$STATE/replaced.list" ]; then
+            tar -czf "$STATE/rollback.tar.gz" -C / -T "$STATE/replaced.list" \
+                || { rm -f "$STATE/rollback.tar.gz"; die "could not back up the files this update replaces; nothing was changed"; }
+        else
+            tar -czf "$STATE/rollback.tar.gz" -T /dev/null || die "could not write the rollback archive; nothing was changed"
+        fi
     fi
 
-    printf '%s\n' "$CURRENT" > "$STATE/previous-version"
-    : > "$STATE/pending"
+    # single edition: the install makes the gateway image and its hash immutable; lift it for the replace
+
+    [ -z "${gwimg:-}" ] || chattr -i "$GWIMG" "$GWSUM" 2>/dev/null || true
+
+    begin_change
     if ! tar -xzf "$B/payload.tar.gz" -C / --no-same-owner --keep-directory-symlink --no-overwrite-dir --warning=no-unknown-keyword 2>/dev/null; then
-        say "applying the payload failed"; cmd_rollback_now; die "the update was rolled back"
+        fail_applied "applying the payload failed"
     fi
     if [ -x /usr/local/lib/ombra-update/post.sh ]; then
-        /usr/local/lib/ombra-update/post.sh "$CURRENT" "$ver" || { say "post step failed"; cmd_rollback_now; die "the update was rolled back"; }
+        /usr/local/lib/ombra-update/post.sh "$CURRENT" "$ver" || fail_applied "post step failed"
         rm -f /usr/local/lib/ombra-update/post.sh
     fi
-    printf '%s\n' "$ver" > /etc/ombra/version
-    sed -i "s/^VERSION_ID=.*/VERSION_ID=$ver/" /usr/lib/os-release 2>/dev/null || true
+    # the gateway container is not restarted here (the network would drop mid-update): the restart picks the image up
+    if [ -n "$gwimg" ]; then
+        gw_image_ok || fail_applied "the gateway image does not match its checksum"
+        # defence in depth only: the hash check at every container start is what refuses a changed image
+        chattr +i "$GWIMG" "$GWSUM" 2>/dev/null || say "note: the new gateway image could not be marked immutable"
+    fi
+    set_version "$ver"
+    rm -f "$STATE/applying"
     rm -rf "$B"
     sync
+    write_state "applied" "$ver"
+    [ -z "$gwimg" ] || say "The gateway image was replaced; the new one is used after the restart."
     say "Updated to $ver. Restart to finish. A rollback stays available for ten minutes after the next boot."
+}
+
+# ---- Debian updates (user-started only; `check` never contacts Debian)
+
+sys() { # a package tool with a sane PATH, no prompts, and without the lock's descriptor (daemons it starts must not hold it)
+    t=$(command -v "$1") || return 127; shift
+    env PATH="$SAFE_PATH" LC_ALL=C.UTF-8 DEBIAN_FRONTEND=noninteractive UCF_FORCE_CONFFOLD=1 APT_LISTCHANGES_FRONTEND=none "$t" "$@" 9>&-
+}
+
+apt_get() { sys apt-get $APT_OPTS "$@"; }
+
+apt_clean() { # release images ship without package lists or downloaded packages; keep it that way
+    rm -rf /var/lib/apt/lists/* 2>/dev/null
+    rm -f /var/cache/apt/*.bin /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/* 2>/dev/null
+    return 0
+}
+
+sec_abort() { # nothing was installed: drop the rollback point and the downloaded lists
+    [ "$ROLE" = desktop ] && snap_drop
+    rm -f "$STATE/boot.tar" "$STATE/efi.tar" "$STATE/plan" "$STATE/plan.sim"
+    apt_clean
+}
+
+cmd_security() {
+    need_root security
+    norb=""
+    case "${1:-}" in
+        "") ;;
+        --no-rollback) norb=1 ;;
+        *) say "usage: ombra-update security [--no-rollback]"; exit 2 ;;
+    esac
+    if [ "$ROLE" = gateway ] && [ -z "$norb" ]; then
+        die "the gateway cannot undo package upgrades (it has no volume manager). To install Debian's updates anyway, run: sudo ombra-update security --no-rollback"
+    fi
+    [ "$ROLE" = desktop ] && [ -n "$norb" ] && die_code 2 "the desktop always keeps a rollback point: run ombra-update security"
+    take_lock || die "another ombra-update is running"
+    root_writable || die "this boot is Amnesic (or the disk is read-only): restart in Persistent mode to update"
+    [ ! -e "$STATE/applying" ] || die "the last update did not finish: run ombra-update rollback first"
+    [ ! -e "$STATE/pending" ] || die "an update is already waiting for a restart or a commit: restart first (it commits ten minutes after a healthy boot), or run ombra-update rollback"
+    mkdir -p "$STATE"
+    free=$(free_kb "$STATE")
+    [ "$free" -gt 1048576 ] 2>/dev/null || die "not enough free space (need 1024 MB)"
+    L="$STATE/apt.log"; : > "$L"
+
+    if [ "$ROLE" = gateway ] && [ -n "$(sys dpkg --audit 2>/dev/null)" ]; then
+        # an earlier upgrade was interrupted; apt refuses to plan until dpkg has finished it
+        say "finishing an interrupted package installation"
+        sys dpkg --force-confold --force-confdef --configure -a >> "$L" 2>&1 \
+            || { tail -n 8 "$L"; die_code 4 "an interrupted package installation could not be finished: reinstall the gateway from a fresh image"; }
+    fi
+
+    # the snapshot comes before the package lists land, so an undo leaves none behind
+    [ "$ROLE" = desktop ] && snap_create
+    say "Fetching Debian's package lists through Tor"
+    if ! apt_get -q update --error-on=any >> "$L" 2>&1; then
+        sec_abort
+        if grep -qE 'NO_PUBKEY|BADSIG|EXPKEYSIG|REVKEYSIG|signatures were invalid|is not signed|GPG error|OpenPGP' "$L"; then
+            tail -n 4 "$L"; die "Debian's package lists failed their signature check; nothing was installed"
+        fi
+        if grep -qiE 'could not connect|could not resolve|unable to connect|temporary failure|connection (failed|refused|timed out)|socks' "$L"; then
+            die_code 75 "could not reach Debian through Tor (is Tor up?); nothing was changed"
+        fi
+        tail -n 4 "$L"; die "fetching Debian's package lists failed; nothing was changed"
+    fi
+
+    # the plan: what an upgrade would install, upgrade or remove
+    if ! apt_get -s -q --with-new-pkgs upgrade > "$STATE/plan.sim" 2>&1; then
+        tail -n 4 "$STATE/plan.sim"; sec_abort; die "Debian's updates cannot be planned; nothing was changed"
+    fi
+    awk '$1=="Inst" || $1=="Remv" { p=$2; sub(/:.*/, "", p); print $1, p }' "$STATE/plan.sim" > "$STATE/plan"
+    if [ ! -s "$STATE/plan" ]; then
+        sec_abort; say "no Debian updates are pending; nothing was changed"; exit 0
+    fi
+    rm_list=$(awk '$1=="Remv" { printf "%s ", $2 }' "$STATE/plan")
+    [ -z "$rm_list" ] || { sec_abort; die "Debian's updates would remove packages ($rm_list); nothing was changed. This needs an Ombra release"; }
+    hold=/dev/null; [ -r "$HOLD" ] && hold=$HOLD
+    held=$(awk 'NR==FNR { sub(/#.*/, ""); for (i = 1; i <= NF; i++) h[$i]; next } ($2 in h) { printf "%s ", $2 }' "$hold" "$STATE/plan")
+    [ -z "$held" ] || { sec_abort; die "Debian's updates touch held packages ($held); nothing was changed. This needs an Ombra release"; }
+
+    kb=$(apt_get -qq --print-uris --with-new-pkgs upgrade 2>/dev/null | awk '{ s += $3 } END { printf "%d", s / 1024 }')
+    is_num "$kb" || { sec_abort; die "could not size Debian's updates; nothing was changed"; }
+    if [ "$ROLE" = desktop ] && [ "$kb" -gt "$SEC_MAX_KB" ]; then
+        sec_abort; die "Debian's updates are too large to undo safely ($((kb / 1024)) MB); nothing was changed. Wait for the next Ombra release, which includes them"
+    fi
+    need=$((1048576 + 3 * kb)); free=$(free_kb "$STATE")
+    [ "$free" -gt "$need" ] 2>/dev/null || { sec_abort; die "not enough free space (need $((need / 1024)) MB); nothing was changed"; }
+    if grep -qE '^Inst (linux-image|initramfs)' "$STATE/plan"; then
+        bfree=$(free_kb "$BOOTDIR")
+        [ "$bfree" -gt 204800 ] 2>/dev/null || { sec_abort; die "not enough free space in /boot for a new kernel (need 200 MB); nothing was changed"; }
+    fi
+
+    n=$(grep -c '^Inst ' "$STATE/plan")
+    say "Installing $n Debian update(s), $((kb / 1024 + 1)) MB: $(awk '{ printf "%s ", $2 }' "$STATE/plan")"
+    if [ "$ROLE" = desktop ]; then
+        boot_save || { sec_abort; die "not enough free space to keep a copy of /boot and the ESP for the rollback; nothing was changed"; }
+        begin_change
+    else
+        say "the gateway cannot undo this (no rollback point)"
+    fi
+    if ! apt_get -y -q -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef --with-new-pkgs upgrade >> "$L" 2>&1; then
+        tail -n 8 "$L"
+        apt_clean
+        rm -f "$STATE/plan" "$STATE/plan.sim"
+        [ "$ROLE" = desktop ] && fail_applied "installing Debian's updates failed"
+        die_code 4 "installing Debian's updates failed, and the gateway cannot undo it: restart the gateway and run 'sudo ombra-update security --no-rollback' again; if Tor does not come back, reinstall the gateway from a fresh image"
+    fi
+    apt_clean
+
+    restart=""
+    [ -e "$REBOOT_FLAG" ] && restart=1
+    grep -qE '^Inst (linux-|initramfs|libc6|libc-bin|systemd|libsystemd|udev|libudev|libssl|openssl|tor)' "$STATE/plan" && restart=1
+    if [ "$ROLE" = desktop ] && lvs --noheadings -o lv_attr "$VG/$SNAP" 2>/dev/null | grep -q '^ *s...I'; then
+        # the upgrade wrote more than the snapshot holds: it is unusable, so say so instead of offering an undo
+        snap_drop; rm -f "$STATE/boot.tar" "$STATE/efi.tar" "$STATE/pending"
+        say "warning: the updates were larger than the rollback point could hold, so they cannot be undone"
+    fi
+    rm -f "$STATE/applying" "$STATE/plan" "$STATE/plan.sim" "$L"
+    sync
+    write_state "applied-security" ${restart:+restart}
+    if [ -n "$restart" ]; then
+        say "Debian's updates are installed. Restart to finish: a kernel or core library changed."
+    else
+        say "Debian's updates are installed. No restart is needed; programs that were already open use the fixes once reopened."
+    fi
+    [ "$ROLE" = desktop ] && [ -e "$STATE/pending" ] && say "A rollback stays available until ten minutes after the next boot; Ombra updates wait until then."
+    return 0
 }
 
 cmd_rollback_now() {
     if [ "$ROLE" = desktop ]; then
         lvs "$VG/$SNAP" >/dev/null 2>&1 || { say "no rollback point"; return 1; }
-        lvconvert --merge "$VG/$SNAP" >/dev/null 2>&1 || return 1
+        # /boot first: it is restored in place and can be retried; the merge happens at the next boot
+        boot_restore || return 1
+        lvconvert --merge "$VG/$SNAP" >/dev/null 2>&1 || { say "could not schedule the rollback (lvconvert --merge failed)"; return 1; }
         say "rollback scheduled: restart now, and once more before you update again"
     else
         [ -f "$STATE/rollback.tar.gz" ] || { say "no rollback point"; return 1; }
-        tar -xzf "$STATE/rollback.tar.gz" -C / --warning=no-unknown-keyword 2>/dev/null || return 1
+        tar -xzf "$STATE/rollback.tar.gz" -C / --warning=no-unknown-keyword 2>/dev/null || { say "restoring the replaced files failed"; return 1; }
         [ -f "$STATE/added.list" ] && while IFS= read -r f; do [ -n "$f" ] && rm -f "/$f"; done < "$STATE/added.list"
         prev=$(cat "$STATE/previous-version" 2>/dev/null)
-        if valid_value "${prev:-}"; then
-            printf '%s\n' "$prev" > /etc/ombra/version
-            sed -i "s/^VERSION_ID=.*/VERSION_ID=$prev/" /usr/lib/os-release 2>/dev/null || true
-        fi
+        valid_value "${prev:-}" && set_version "$prev"
         say "files restored: restart to finish"
     fi
-    rm -f "$STATE/pending"
+    rm -f "$STATE/pending" "$STATE/applying"
 }
 
-cmd_rollback() { need_root rollback; root_writable || die "restart in Persistent mode to roll back"; cmd_rollback_now; }
+cmd_rollback() {
+    need_root rollback
+    take_lock || die "another ombra-update is running"
+    root_writable || die "restart in Persistent mode to roll back"
+    if [ "$ROLE" = desktop ] && lvs "$VG/$SNAP" >/dev/null 2>&1; then
+        when=$(date -r "$STATE/pending" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "an unknown time")
+        if home_on_root; then
+            say "Undoing returns the whole system disk, including your home folder, to $when (the moment before the update)."
+            say "Anything saved since then (files, wallets, chats, settings) is lost at the next restart."
+        else
+            say "Undoing returns the system to $when (the moment before the update). Your home folder is on its own volume and is not affected."
+        fi
+    fi
+    cmd_rollback_now || exit 1
+}
 
 cmd_commit() {
     need_root commit
     [ -e "$STATE/pending" ] || { say "nothing to commit"; return 0; }
-    if [ "$ROLE" = desktop ] && lvs "$VG/$SNAP" >/dev/null 2>&1; then
-        # a suspended-and-resumed VM can leave the snapshot half-removed: retry, then clear whatever is left
-        lvremove -fy "$VG/$SNAP" >/dev/null 2>&1 || { sleep 2; dmsetup resume "$VG-root" >/dev/null 2>&1; lvremove -fy "$VG/$SNAP" >/dev/null 2>&1; }
-        if lvs "$VG/$SNAP" >/dev/null 2>&1; then
-            say "the rollback point could not be removed yet; it will be tried again at the next start"
-            return 1
+    # an Amnesic boot sees the disk's pending file but must not drop the rollback point
+    root_writable || { say "Amnesic boot: the rollback point is kept until a Persistent boot"; return 0; }
+    take_lock || { say "an update is in progress; not committing now"; return 0; }
+    if [ -e "$STATE/applying" ]; then
+        say "the last update did not finish, so its rollback point is kept: run ombra-update rollback"
+        return 1
+    fi
+    p=$(cat "$STATE/pending" 2>/dev/null); b=$(cat "$BOOTID" 2>/dev/null)
+    if [ -n "$p" ] && [ "$p" = "$b" ]; then
+        say "the update is not committed until the machine has restarted"; return 0
+    fi
+    if [ -z "$p" ]; then
+        # 1.1.0 left pending empty: commit only if it predates this boot
+        bt=$(awk '$1=="btime"{print $2}' "$PROCSTAT" 2>/dev/null); pt=$(stat -c %Y "$STATE/pending" 2>/dev/null)
+        if is_num "$bt" && is_num "$pt" && [ "$pt" -ge "$bt" ]; then
+            say "the update is not committed until the machine has restarted"; return 0
         fi
     fi
-    rm -f "$STATE/pending" "$STATE/rollback.tar.gz" "$STATE/replaced.list" "$STATE/added.list"
+    if [ "$ROLE" = desktop ] && ! snap_drop; then
+        say "the rollback point could not be removed yet; it will be tried again at the next start"
+        return 1
+    fi
+    rm -f "$STATE/pending" "$STATE/rollback.tar.gz" "$STATE/replaced.list" "$STATE/added.list" "$STATE/boot.tar" "$STATE/efi.tar"
     say "update committed"
 }
 
 case "${1:-}" in
     check) cmd_check ;;
     status) cmd_status ;;
+    info) cmd_info ;;
     apply) cmd_apply ;;
+    security) shift; cmd_security "$@" ;;
     rollback) cmd_rollback ;;
     commit) cmd_commit ;;
-    *) say "usage: ombra-update check|status|apply|rollback|commit"; exit 2 ;;
+    *) say "usage: ombra-update check|status|info|apply|security [--no-rollback]|rollback|commit"; exit 2 ;;
 esac

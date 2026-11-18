@@ -20,9 +20,15 @@ tests/leaks/run-gateway-leaks.sh \
 and no general sudo, so the probe travels inside the image and the host
 drives it through its one narrow NOPASSWD sudoers grant. The orchestrator
 asserts the VM is in `vmrun list`, runs the probe, copies the report
-(`/run/ombra-leak/report.txt`, mode 0644 in a root-owned 0755 directory) back to the host and prints it, and exits the probe's code
-(0 = 7/7, else the failing count). Nothing is downloaded and nothing is
-copied in.
+(`/run/ombra-leak/report.txt`, mode 0644 in a root-owned 0755 directory) back to the host and prints it, and exits the
+report's `SUMMARY: ... fail=N` count (0 = 7/7, else the failing count).
+Nothing is downloaded and nothing is copied in.
+
+| Runner outcome | Exit |
+|---|---|
+| report has `fail=0` and vmrun exited 0 | 0 (PASS) |
+| report has `fail=N`, N > 0 | N (FAIL) |
+| no report, a stale report (its `started-epoch` predates this run), no `SUMMARY` line, or `fail=0` with a non-zero vmrun exit | 125 (FATAL) |
 
 ## Guest password and the test-only ISO
 
@@ -96,7 +102,7 @@ nft itself.
 
 - the gateway's own `udp` client socket on the upstream NIC
   (`%ombra-upstream:68`) — systemd-networkd DHCP on the upstream side.
-- dnsmasq `10.55.10.1:53` (tcp/udp), Tor `10.55.10.1:9050`/`:9040`,
+- dnsmasq `10.55.10.1:53` (tcp/udp), Tor `10.55.10.1:9050`/`:9150`/`:9040`,
   the filter `10.55.10.1:9052`, and loopback `9050`/`9051`/`5353`.
 - `getent hosts` may return an AAAA through Tor (glibc asks v6 first).
   That is a Tor-DNS answer, not a v6 leak; no v6 route exists (test 6).
@@ -110,6 +116,7 @@ for the UDP probes, timeout-bounded.
 ## Files
 
 - `run-gateway-leaks.sh` — host-side orchestrator: vmrun guest-ops delivery
-  (running-state assert, stale-report pre-clean, sudo'd probe run, report
-  copy-out and print, best-effort guest cleanup, result banner); exits the
-  probe's code, FATAL = 125. Usage: `run-gateway-leaks.sh <gateway.vmx>`.
+  (running-state assert, sudo'd probe run, report copy-out, stale-report
+  rejection by its `started-epoch` stamp, print, best-effort guest cleanup,
+  result banner); exits the report's `fail=N`, FATAL = 125. Usage:
+  `run-gateway-leaks.sh <gateway.vmx>`.

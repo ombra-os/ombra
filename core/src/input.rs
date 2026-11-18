@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 use std::fmt;
 use std::io::{self, Read};
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -179,14 +180,9 @@ impl Widget for &SecretField {
             let n = self.placeholder.chars().count() as u16;
             let avail = max.saturating_sub(x);
             let start = x + avail.saturating_sub(n) / 2;
-            let mut px = start;
-            for ch in self.placeholder.chars() {
-                if px >= max {
-                    break;
-                }
+            for (px, ch) in (start..max).zip(self.placeholder.chars()) {
                 buf[(px, y)].set_char(ch);
                 buf[(px, y)].set_fg(theme::MUTED);
-                px += 1;
             }
         } else {
             for _ in 0..self.len() {
@@ -380,7 +376,30 @@ impl EscState {
     }
 }
 
+/// Typed characters must not outlive their use: overwrite each event in place (volatile, so the stores are never
+/// elided before the buffer is freed). Stack copies made while a key is handled are out of reach.
+pub fn wipe_keys<'a>(keys: impl IntoIterator<Item = &'a mut KeyEvent>) {
+    let blank = KeyEvent::new(KeyCode::Null, KeyModifiers::empty());
+    for k in keys {
+        // SAFETY: k is a valid, aligned, exclusive reference; KeyEvent is Copy, so overwriting drops nothing.
+        unsafe { std::ptr::write_volatile(k, blank) };
+    }
+    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Push without leaving a stale copy behind: on growth the old buffer is wiped before it is freed.
+fn push_wiped(keys: &mut Vec<KeyEvent>, k: KeyEvent) {
+    if keys.len() == keys.capacity() {
+        let mut grown = Vec::with_capacity(keys.capacity().saturating_mul(2).max(16));
+        grown.extend_from_slice(keys);
+        wipe_keys(keys.iter_mut());
+        *keys = grown;
+    }
+    keys.push(k);
+}
+
 /// Drain everything queued right now, in arrival order; never blocks (O_NONBLOCK is the caller's contract).
+/// The caller wipes the returned keys (`wipe_keys`) once handled.
 pub fn drain_keys(r: &mut dyn Read) -> io::Result<Vec<KeyEvent>> {
     drain_keys_with(r, &mut EscState::default())
 }
@@ -388,74 +407,152 @@ pub fn drain_keys(r: &mut dyn Read) -> io::Result<Vec<KeyEvent>> {
 fn drain_keys_with(r: &mut dyn Read, esc: &mut EscState) -> io::Result<Vec<KeyEvent>> {
     let mut keys = Vec::new();
     let mut chunk = [0u8; 64];
-    loop {
+    let res = loop {
         match r.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => keys.extend(chunk[..n].iter().filter_map(|&b| esc.feed(b))),
+            Ok(0) => break Ok(()),
+            Ok(n) => {
+                for k in chunk[..n].iter().filter_map(|&b| esc.feed(b)) {
+                    push_wiped(&mut keys, k);
+                }
+            }
             Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
-            Err(e) => return Err(e),
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break Ok(()),
+            Err(e) => break Err(e),
+        }
+    };
+    chunk.zeroize();
+    match res {
+        Ok(()) => Ok(keys),
+        Err(e) => {
+            wipe_keys(keys.iter_mut());
+            Err(e)
         }
     }
-    chunk.zeroize();
-    Ok(keys)
 }
 
 /// Owns a fresh nonblocking read fd (a separate open, so its flags never leak onto the drawing fd).
 pub struct KeyReader<R: Read> {
     reader: Option<R>,
+    /// The reader's own fd when pollable: waits block in poll(2) instead of sleeping in slices.
+    wait_fd: Option<RawFd>,
     pending: VecDeque<KeyEvent>,
     esc: EscState,
 }
 
+/// Sleep slice for readers without a pollable fd, and the back-off when poll reports ready but yields no key.
 const KEY_SLICE: Duration = Duration::from_millis(40);
+
+impl<R: Read + AsRawFd> KeyReader<R> {
+    /// The fd stays valid for the reader's life: the reader is owned here and never replaced.
+    pub fn pollable(reader: Option<R>) -> Self {
+        let fd = reader.as_ref().map(AsRawFd::as_raw_fd);
+        let mut kr = KeyReader::new(reader);
+        kr.wait_fd = fd;
+        kr
+    }
+}
 
 impl<R: Read> KeyReader<R> {
     pub fn new(reader: Option<R>) -> Self {
         KeyReader {
             reader,
+            wait_fd: None,
             pending: VecDeque::new(),
             esc: EscState::default(),
         }
     }
 
+    /// Blocks until input is readable or `d` passes; true when poll reported the fd ready.
+    /// No pollable fd: one sleep slice. Hangup/error stays "ready" forever, so it sleeps a slice instead of spinning.
+    pub fn wait(&self, d: Duration) -> bool {
+        let Some(fd) = self.wait_fd else {
+            std::thread::sleep(KEY_SLICE.min(d));
+            return false;
+        };
+        let ms = d.as_nanos().div_ceil(1_000_000).min(i32::MAX as u128) as i32;
+        let mut p = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one valid pollfd for the duration of the call.
+        let n = unsafe { libc::poll(&mut p, 1, ms) };
+        if n < 0 || (n > 0 && p.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0) {
+            std::thread::sleep(KEY_SLICE.min(d));
+            return false;
+        }
+        n > 0
+    }
+
+    /// The caller wipes the returned keys (`wipe_keys`) once handled.
     pub fn drain_available(&mut self) -> io::Result<Vec<KeyEvent>> {
-        let mut keys: Vec<_> = self.pending.drain(..).collect();
+        let mut keys = Vec::with_capacity(self.pending.len());
+        keys.extend(self.pending.iter().copied());
+        wipe_keys(self.pending.iter_mut());
+        self.pending.clear();
         if let Some(r) = self.reader.as_mut() {
-            keys.extend(drain_keys_with(r, &mut self.esc)?);
+            match drain_keys_with(r, &mut self.esc) {
+                Ok(mut fresh) => {
+                    for &k in &fresh {
+                        push_wiped(&mut keys, k);
+                    }
+                    wipe_keys(fresh.iter_mut());
+                }
+                Err(e) => {
+                    wipe_keys(keys.iter_mut());
+                    return Err(e);
+                }
+            }
         }
         Ok(keys)
     }
 
     pub fn next_key(&mut self, budget: Duration) -> io::Result<Option<KeyEvent>> {
-        if let Some(k) = self.pending.pop_front() {
+        if let Some(slot) = self.pending.front_mut() {
+            let k = *slot;
+            wipe_keys(std::iter::once(slot));
+            self.pending.pop_front();
             return Ok(Some(k));
         }
         if let Some(k) = self.refill()? {
             return Ok(Some(k));
         }
         let start = Instant::now();
-        while start.elapsed() < budget {
-            std::thread::sleep(KEY_SLICE);
+        while let Some(left) = budget.checked_sub(start.elapsed()).filter(|d| !d.is_zero()) {
+            let ready = self.wait(left);
             if let Some(k) = self.refill()? {
                 return Ok(Some(k));
+            }
+            if ready {
+                // readable yet no key (escape bytes, EOF): back off a slice rather than spin
+                std::thread::sleep(KEY_SLICE.min(budget.saturating_sub(start.elapsed())));
             }
         }
         Ok(None)
     }
 
     fn refill(&mut self) -> io::Result<Option<KeyEvent>> {
-        let keys = self.drain_available()?;
-        let mut it = keys.into_iter();
-        let first = it.next();
-        self.pending.extend(it);
+        let mut keys = self.drain_available()?;
+        let first = keys.first().copied();
+        if let Some(rest) = keys.get(1..) {
+            // pending was just wiped and emptied, so growing it here copies no stale keys
+            self.pending.reserve(rest.len());
+            self.pending.extend(rest.iter().copied());
+        }
+        wipe_keys(keys.iter_mut());
         Ok(first)
+    }
+}
+
+impl<R: Read> Drop for KeyReader<R> {
+    fn drop(&mut self) {
+        wipe_keys(self.pending.iter_mut());
     }
 }
 
 impl KeyReader<std::fs::File> {
     pub fn from_tty(handle: &TtyHandle) -> Self {
-        KeyReader::new(handle.open_reader())
+        KeyReader::pollable(handle.open_reader())
     }
 }
 
@@ -857,7 +954,7 @@ mod tests {
     #[test]
     fn drain_keys_propagates_real_errors() {
         let mut r = ScriptedRead {
-            chunks: [Err(io::Error::new(io::ErrorKind::Other, "boom"))].into(),
+            chunks: [Err(io::Error::other("boom"))].into(),
         };
         assert!(drain_keys(&mut r).is_err());
     }
@@ -908,6 +1005,145 @@ mod tests {
             .unwrap()
             .expect("key arrives");
         assert_eq!(k.code, KeyCode::Char('x'));
+    }
+
+    #[test]
+    fn a_long_paste_survives_buffer_growth_in_order_and_wiping_blanks_it() {
+        let pasted: Vec<u8> = (0..200u8).map(|i| b'a' + i % 26).collect();
+        let mut r = ScriptedRead {
+            chunks: [Ok(pasted.clone()), dry()].into(),
+        };
+        let mut keys = drain_keys(&mut r).unwrap();
+        let typed: Vec<u8> = keys
+            .iter()
+            .map(|k| match k.code {
+                KeyCode::Char(c) => c as u8,
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        assert_eq!(typed, pasted);
+        wipe_keys(keys.iter_mut());
+        assert!(keys.iter().all(|k| k.code == KeyCode::Null));
+    }
+
+    #[test]
+    fn keyreader_leaves_no_served_key_in_its_queue() {
+        let mut kr = KeyReader::new(Some(ScriptedRead {
+            chunks: [Ok(b"pw".to_vec()), dry()].into(),
+        }));
+        assert_eq!(
+            kr.next_key(Duration::ZERO).unwrap().unwrap().code,
+            KeyCode::Char('p')
+        );
+        // the queued 'w' is still served, and nothing typed stays behind once it is
+        assert_eq!(
+            kr.next_key(Duration::ZERO).unwrap().unwrap().code,
+            KeyCode::Char('w')
+        );
+        assert!(kr.pending.is_empty());
+    }
+
+    /// A real pipe behind the reader, counting read(2) calls: a poll wait reads only when woken.
+    struct CountingPipe {
+        file: std::fs::File,
+        reads: std::rc::Rc<std::cell::Cell<usize>>,
+    }
+
+    impl Read for CountingPipe {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.reads.set(self.reads.get() + 1);
+            self.file.read(buf)
+        }
+    }
+
+    impl AsRawFd for CountingPipe {
+        fn as_raw_fd(&self) -> RawFd {
+            self.file.as_raw_fd()
+        }
+    }
+
+    /// (nonblocking read end wrapped in a counting reader, its read counter, write end)
+    #[allow(clippy::type_complexity)]
+    fn counting_pipe() -> (
+        KeyReader<CountingPipe>,
+        std::rc::Rc<std::cell::Cell<usize>>,
+        std::fs::File,
+    ) {
+        use std::os::unix::io::FromRawFd as _;
+        let mut fds = [0; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        unsafe {
+            let fl = libc::fcntl(fds[0], libc::F_GETFL);
+            assert_eq!(libc::fcntl(fds[0], libc::F_SETFL, fl | libc::O_NONBLOCK), 0);
+        }
+        let reads = std::rc::Rc::new(std::cell::Cell::new(0));
+        let rx = CountingPipe {
+            file: unsafe { std::fs::File::from_raw_fd(fds[0]) },
+            reads: std::rc::Rc::clone(&reads),
+        };
+        let tx = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+        (KeyReader::pollable(Some(rx)), reads, tx)
+    }
+
+    #[test]
+    fn a_pollable_reader_wakes_on_the_keypress_not_on_a_slice() {
+        use std::io::Write as _;
+        let (mut kr, reads, mut tx) = counting_pipe();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            tx.write_all(b"x").unwrap();
+            tx
+        });
+        let start = Instant::now();
+        let k = kr
+            .next_key(Duration::from_secs(5))
+            .unwrap()
+            .expect("key arrives");
+        assert_eq!(k.code, KeyCode::Char('x'));
+        assert!(start.elapsed() < Duration::from_secs(2), "woke on the byte");
+        // one dry refill up front, then one wake: 40 ms slicing would have read ~8 times
+        assert!(
+            reads.get() <= 4,
+            "{} reads: the wait is polling",
+            reads.get()
+        );
+        drop(writer.join().unwrap());
+    }
+
+    #[test]
+    fn a_pollable_reader_sleeps_the_whole_budget_on_a_silent_tty() {
+        let (mut kr, reads, _tx) = counting_pipe();
+        let start = Instant::now();
+        assert_eq!(kr.next_key(Duration::from_millis(200)).unwrap(), None);
+        assert!(start.elapsed() >= Duration::from_millis(200));
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(reads.get() <= 4, "{} reads on a silent tty", reads.get());
+    }
+
+    #[test]
+    fn a_hung_up_reader_backs_off_instead_of_spinning() {
+        let (mut kr, reads, tx) = counting_pipe();
+        drop(tx);
+        let start = Instant::now();
+        assert_eq!(kr.next_key(Duration::from_millis(200)).unwrap(), None);
+        assert!(start.elapsed() >= Duration::from_millis(200));
+        // slices only: a spin would read thousands of times
+        assert!(reads.get() <= 20, "{} reads after hangup", reads.get());
+    }
+
+    #[test]
+    fn a_pollable_reader_still_serves_a_paste_in_order_and_leaves_nothing_queued() {
+        use std::io::Write as _;
+        let (mut kr, _reads, mut tx) = counting_pipe();
+        tx.write_all(b"pw\r").unwrap();
+        let codes: Vec<KeyCode> = (0..3)
+            .map(|_| kr.next_key(Duration::from_secs(1)).unwrap().unwrap().code)
+            .collect();
+        assert_eq!(
+            codes,
+            [KeyCode::Char('p'), KeyCode::Char('w'), KeyCode::Enter]
+        );
+        assert!(kr.pending.is_empty());
     }
 
     #[test]

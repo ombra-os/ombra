@@ -15,7 +15,9 @@ use ratatui::{Frame, Terminal};
 
 use ombra_boot::askpass::{self, AskRequest};
 use ombra_boot::fb::{self, UiBackend};
-use ombra_boot::input::{byte_to_key, FieldEvent, KeyReader, SecretBuf, SecretField, Severity};
+use ombra_boot::input::{
+    byte_to_key, wipe_keys, FieldEvent, KeyReader, SecretBuf, SecretField, Severity,
+};
 use ombra_boot::keyscript;
 use ombra_boot::term;
 use ombra_boot::{art, theme, BUILD_PASSPHRASE};
@@ -63,33 +65,41 @@ impl Agent {
 }
 
 /// True only on cryptsetup's definitive "no key matches" (exit 2); anything else keeps the build-key offer.
+/// Exit 2 also leaves the per-boot record the setup gate accepts instead of re-deriving; any other outcome clears it.
 fn build_key_is_dead() -> bool {
-    use std::io::Write as _;
-    use std::process::{Command, Stdio};
-    let Some(source) = std::env::var_os("CRYPTTAB_SOURCE").and_then(|s| s.into_string().ok())
-    else {
-        return false;
+    let record = Path::new(keyscript::DEAD_RECORD);
+    let Some(device) = crypttab_device() else {
+        return keyscript::note_build_key_test(record, None, None);
     };
+    let exit = test_build_key(&device);
+    let body = keyscript::dead_record_body_for(Path::new(&device));
+    keyscript::note_build_key_test(record, exit, body.as_deref())
+}
+
+fn crypttab_device() -> Option<String> {
+    let source = std::env::var_os("CRYPTTAB_SOURCE")?.into_string().ok()?;
     let device = match source.strip_prefix("UUID=") {
         Some(uuid) => format!("/dev/disk/by-uuid/{uuid}"),
         None => source,
     };
-    if !std::path::Path::new(&device).exists() {
-        return false;
-    }
-    let Ok(mut child) = Command::new("cryptsetup")
-        .args(["open", "--test-passphrase", "--key-file", "-", &device])
+    Path::new(&device).exists().then_some(device)
+}
+
+/// cryptsetup's exit code for the build key; None when it could not run or was killed.
+fn test_build_key(device: &str) -> Option<i32> {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("cryptsetup")
+        .args(["open", "--test-passphrase", "--key-file", "-", device])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-    else {
-        return false;
-    };
+        .ok()?;
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(BUILD_PASSPHRASE.as_bytes());
     }
-    matches!(child.wait().map(|s| s.code()), Ok(Some(2)))
+    child.wait().ok()?.code()
 }
 
 fn main() -> ExitCode {
@@ -143,17 +153,17 @@ fn run() -> Result<()> {
     loop {
         // batch drain: byte-at-a-time would cap typing at the poll rate
         if let (Some(keys), true) = (reader.as_mut(), screen.is_some()) {
-            match keys.drain_available() {
-                Ok(pressed) => {
-                    // typing re-arms the blink
-                    last_caret = Instant::now();
-                    agent.caret_phase = true;
-                    agent.field.set_caret(true);
-                    for k in pressed {
-                        on_key(&mut agent, k);
-                    }
+            // a dead reader falls back to the poll cadence
+            if let Ok(mut pressed) = keys.drain_available() {
+                // typing re-arms the blink
+                last_caret = Instant::now();
+                agent.caret_phase = true;
+                agent.field.set_caret(true);
+                for &k in &pressed {
+                    on_key(&mut agent, k);
                 }
-                Err(_) => {} // dead reader: back to the poll cadence
+                // typed characters never linger in the freed batch
+                wipe_keys(pressed.iter_mut());
             }
         }
 
@@ -223,7 +233,14 @@ fn run() -> Result<()> {
                 }
             }
         } else {
-            std::thread::sleep(Duration::from_millis(40));
+            // until a key or the next scan: no fixed wake-up slices
+            let left = POLL.saturating_sub(last_scan.elapsed());
+            match (reader.as_ref(), screen.is_some()) {
+                (Some(keys), true) => {
+                    keys.wait(left);
+                }
+                _ => std::thread::sleep(left),
+            }
         }
     }
 }

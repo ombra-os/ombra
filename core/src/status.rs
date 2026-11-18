@@ -18,7 +18,13 @@ pub const GATEWAY_SOCKS: &str = "10.55.10.1:9050";
 pub const ONION_PROBE: &str = "2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion";
 pub const CACHE_TTL_SECS: u64 = 30;
 pub const WARMUP_SECS: u64 = 120;
-pub const WARMUP_RETRY_SECS: u64 = 3;
+pub const WARMUP_RETRY_SECS: u64 = 5;
+/// The gateway's control-port filter: answers `status/circuit-established` locally, with no traffic leaving the gateway.
+pub const GATEWAY_CONTROL: &str = "10.55.10.1:9052";
+/// A confirmed Tor exit is re-checked against check.torproject.org this often while circuits stay up.
+pub const EXIT_CHECK_TTL_SECS: u64 = 900;
+/// A failed exit check is retried this often.
+pub const EXIT_RETRY_SECS: u64 = 120;
 pub const FORCE_CACHE_ENV: &str = "OMBRA_STATUS_FORCE_CACHE";
 pub const TIMESYNC_STATE_FILES: &[&str] = &["/run/ombra/timesync", "/var/lib/ombra/timesync"];
 
@@ -28,7 +34,8 @@ const CURL_DEADLINE: Duration = Duration::from_secs(45);
 const DIG_DEADLINE: Duration = Duration::from_secs(15);
 const REQUEST_WINDOW: Duration = Duration::from_millis(250);
 const TICK: Duration = Duration::from_millis(1000);
-const ACCEPT_POLL: Duration = Duration::from_millis(50);
+/// Back-off only when poll(2) itself fails; an idle listener blocks until a client or the tick.
+const POLL_ERROR_BACKOFF: Duration = Duration::from_millis(50);
 
 // ---- verdicts ----
 
@@ -190,7 +197,67 @@ pub trait Probes {
     fn gateway_dns_onion(&mut self) -> bool;
 }
 
-pub struct ExecProbes;
+/// Remembers the last exit check: the 30 s cadence asks the gateway whether Tor has circuits (local, free) and
+/// reaches check.torproject.org only when that answer is stale.
+#[derive(Default)]
+pub struct ExecProbes {
+    exit_check: Option<(Instant, bool)>,
+}
+
+/// `Some(true/false)` from a GETINFO status/circuit-established reply, `None` when the reply does not say.
+pub fn parse_circuit_reply(reply: &str) -> Option<bool> {
+    reply.lines().find_map(|l| {
+        let v = l
+            .strip_prefix("250-status/circuit-established=")
+            .or_else(|| l.strip_prefix("250 status/circuit-established="))?;
+        match v.trim() {
+            "1" => Some(true),
+            "0" => Some(false),
+            _ => None,
+        }
+    })
+}
+
+/// The cached exit verdict while it is still fresh: a pass holds for EXIT_CHECK_TTL_SECS, a failure for EXIT_RETRY_SECS.
+/// `None` = a new check is due.
+pub fn cached_exit_verdict(cached: Option<(Instant, bool)>, now: Instant) -> Option<bool> {
+    let (at, ok) = cached?;
+    let ttl = if ok {
+        EXIT_CHECK_TTL_SECS
+    } else {
+        EXIT_RETRY_SECS
+    };
+    (now.saturating_duration_since(at) < Duration::from_secs(ttl)).then_some(ok)
+}
+
+fn circuit_established() -> Option<bool> {
+    use std::net::{SocketAddr, TcpStream};
+    let addr: SocketAddr = GATEWAY_CONTROL.parse().ok()?;
+    let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).ok()?;
+    s.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    s.write_all(b"AUTHENTICATE\r\nGETINFO status/circuit-established\r\nQUIT\r\n")
+        .ok()?;
+    let mut reply = Vec::new();
+    let _ = s.take(4096).read_to_end(&mut reply);
+    parse_circuit_reply(&String::from_utf8_lossy(&reply))
+}
+
+fn exit_is_tor() -> bool {
+    // body substring, not exit status; body dropped here
+    run_captured(
+        "curl",
+        &[
+            "-sS",
+            "--max-time",
+            "40",
+            "--socks5-hostname",
+            GATEWAY_SOCKS,
+            "https://check.torproject.org/api/ip",
+        ],
+        CURL_DEADLINE,
+    )
+    .is_some_and(|(_, body)| body.contains("\"IsTor\":true"))
+}
 
 impl Probes for ExecProbes {
     fn gateway_link(&mut self) -> bool {
@@ -202,20 +269,21 @@ impl Probes for ExecProbes {
     }
 
     fn tor_through_gateway(&mut self) -> bool {
-        // body substring, not exit status; body dropped here
-        run_captured(
-            "curl",
-            &[
-                "-sS",
-                "--max-time",
-                "40",
-                "--socks5-hostname",
-                GATEWAY_SOCKS,
-                "https://check.torproject.org/api/ip",
-            ],
-            CURL_DEADLINE,
-        )
-        .map_or(false, |(_, body)| body.contains("\"IsTor\":true"))
+        match circuit_established() {
+            Some(false) => {
+                self.exit_check = None;
+                false
+            }
+            // an unanswered control query falls back to the exit check, through the same cache
+            None | Some(true) => {
+                if let Some(ok) = cached_exit_verdict(self.exit_check, Instant::now()) {
+                    return ok;
+                }
+                let ok = exit_is_tor();
+                self.exit_check = Some((Instant::now(), ok));
+                ok
+            }
+        }
     }
 
     fn gateway_dns_onion(&mut self) -> bool {
@@ -232,10 +300,10 @@ impl Probes for ExecProbes {
             ],
             DIG_DEADLINE,
         )
-        .map_or(false, |(_, out)| {
+        .is_some_and(|(_, out)| {
             out.lines()
                 .next()
-                .map_or(false, |l| l.trim().starts_with("10.66."))
+                .is_some_and(|l| l.trim().starts_with("10.66."))
         })
     }
 }
@@ -331,7 +399,7 @@ pub fn default_cache_path_for(xdg_runtime_dir: Option<&std::ffi::OsStr>, uid: u3
 }
 
 pub fn env_forces_cache(value: Option<&std::ffi::OsStr>) -> bool {
-    value.map_or(false, |v| !v.is_empty())
+    value.is_some_and(|v| !v.is_empty())
 }
 
 fn fresh_cache_snapshot(cache: &Path, now: u64) -> Option<Snapshot> {
@@ -393,7 +461,13 @@ pub fn daemon(socket: &Path, cache: &Path) -> Result<()> {
     let snapshot = Arc::new(Mutex::new(Snapshot::never_probed(read_timesync())));
     let listener = bind_socket(socket)?;
     let running = Arc::new(AtomicBool::new(true));
-    daemon_on(listener, snapshot, running, Box::new(ExecProbes), cache)
+    daemon_on(
+        listener,
+        snapshot,
+        running,
+        Box::new(ExecProbes::default()),
+        cache,
+    )
 }
 
 fn daemon_on(
@@ -415,7 +489,7 @@ fn daemon_on(
                 let started = Instant::now();
                 let mut last = Option::<(Instant, State)>::None;
                 while running.load(Ordering::Relaxed) {
-                    let due = last.map_or(true, |(at, state)| {
+                    let due = last.is_none_or(|(at, state)| {
                         at.elapsed() >= probe_interval(state, started.elapsed())
                     });
                     if due {
@@ -473,19 +547,43 @@ pub fn serve_loop(
     snapshot: &Mutex<Snapshot>,
     running: &AtomicBool,
 ) -> Result<()> {
+    use std::os::unix::io::AsRawFd as _;
+    // nonblocking still: a client that leaves between poll and accept must not wedge the loop
     listener
         .set_nonblocking(true)
         .context("arming the listener")?;
     while running.load(Ordering::Relaxed) {
+        // shutdown is re-checked at least once per tick
+        if !client_waiting(listener.as_raw_fd(), TICK) {
+            continue;
+        }
         match listener.accept() {
             Ok((stream, _)) => handle_connection(stream, snapshot),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(ACCEPT_POLL);
-            }
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) => {}
             Err(e) => return Err(e).context("accepting a status client"),
         }
     }
     Ok(())
+}
+
+/// Blocks until the listener has a client or `timeout` passes.
+fn client_waiting(fd: std::os::unix::io::RawFd, timeout: Duration) -> bool {
+    let ms = timeout.as_millis().min(i32::MAX as u128) as i32;
+    let mut p = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: one valid pollfd for the duration of the call.
+    let n = unsafe { libc::poll(&mut p, 1, ms) };
+    if n < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+        std::thread::sleep(POLL_ERROR_BACKOFF);
+    }
+    n > 0
 }
 
 /// Any client input means the same thing: send the snapshot line, close.
@@ -964,6 +1062,46 @@ mod tests {
     }
 
     #[test]
+    fn an_idle_server_answers_a_new_client_at_once_and_stops_within_a_tick() {
+        let dir = tempdir("prompt");
+        let path = dir.join("p.sock");
+        let shared = Arc::new(Mutex::new(snapshot(
+            true,
+            true,
+            true,
+            State::Ok,
+            TimesyncVerdict::Ok,
+        )));
+        let running = Arc::new(AtomicBool::new(true));
+        let listener = bind_socket(&path).unwrap();
+        let server = {
+            let shared = Arc::clone(&shared);
+            let running = Arc::clone(&running);
+            std::thread::spawn(move || serve_loop(listener, &shared, &running))
+        };
+        for _ in 0..3 {
+            // let the loop settle into its wait, so the client lands mid-tick
+            std::thread::sleep(Duration::from_millis(150));
+            let start = Instant::now();
+            let mut c = UnixStream::connect(&path).unwrap();
+            c.write_all(b"GET\n").unwrap();
+            let mut line = String::new();
+            c.read_to_string(&mut line).unwrap();
+            assert_eq!(parse_snapshot(&line).unwrap().state, State::Ok);
+            assert!(
+                start.elapsed() < TICK / 2,
+                "a waiting client sat out the tick: {:?}",
+                start.elapsed()
+            );
+        }
+        let stop = Instant::now();
+        running.store(false, Ordering::Relaxed);
+        server.join().unwrap().unwrap();
+        assert!(stop.elapsed() < TICK * 3, "shutdown honoured within a tick");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn probing_is_quick_only_while_warming_up_and_not_ok() {
         let early = Duration::from_secs(10);
         let late = Duration::from_secs(WARMUP_SECS + 1);
@@ -1086,10 +1224,50 @@ mod tests {
     #[test]
     #[ignore = "needs the real 10.55.10.1 gateway; dev machines have none"]
     fn live_probes_against_a_real_gateway() {
-        let mut probes = ExecProbes;
+        let mut probes = ExecProbes::default();
         let snap = refresh(&mut probes);
         let line = snap.to_json();
         assert!(parse_snapshot(&line).is_some());
         eprintln!("live snapshot: {line}");
+    }
+
+    #[test]
+    fn exit_checks_are_cached_for_their_ttl() {
+        let at = Instant::now();
+        let s = Duration::from_secs;
+        assert_eq!(cached_exit_verdict(None, at), None);
+        assert_eq!(cached_exit_verdict(Some((at, true)), at), Some(true));
+        assert_eq!(
+            cached_exit_verdict(Some((at, true)), at + s(EXIT_CHECK_TTL_SECS - 1)),
+            Some(true)
+        );
+        assert_eq!(
+            cached_exit_verdict(Some((at, true)), at + s(EXIT_CHECK_TTL_SECS)),
+            None
+        );
+        assert_eq!(
+            cached_exit_verdict(Some((at, false)), at + s(EXIT_RETRY_SECS - 1)),
+            Some(false)
+        );
+        assert_eq!(
+            cached_exit_verdict(Some((at, false)), at + s(EXIT_RETRY_SECS)),
+            None
+        );
+        // a cache stamp from the future (clock oddity) still counts as fresh, never as a reason to re-check
+        assert_eq!(cached_exit_verdict(Some((at + s(5), true)), at), Some(true));
+    }
+
+    #[test]
+    fn circuit_replies_parse_to_a_verdict_or_nothing() {
+        assert_eq!(
+            parse_circuit_reply("250 OK\r\n250-status/circuit-established=1\r\n250 OK\r\n"),
+            Some(true)
+        );
+        assert_eq!(
+            parse_circuit_reply("250-status/circuit-established=0\r\n250 OK\r\n"),
+            Some(false)
+        );
+        assert_eq!(parse_circuit_reply("250 OK\r\n510 refused\r\n"), None);
+        assert_eq!(parse_circuit_reply(""), None);
     }
 }

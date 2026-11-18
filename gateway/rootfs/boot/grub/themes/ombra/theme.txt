@@ -37,7 +37,7 @@ terminal-border: "0"
     left = 50%-360
     top = 8%+250
     width = 720
-    height = 150
+    height = 122
     item_font = "@FONT16@"
     item_color = "#f4f3ef"
     selected_item_font = "@FONT16@"

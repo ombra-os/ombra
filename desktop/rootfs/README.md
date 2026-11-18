@@ -4,10 +4,12 @@
 `desktop/preseed.cfg` and `desktop/late-command.sh`, into the installer
 initrd; the late command untars it over `/target`. It ships configuration
 and vendored assets only. Packages come from `pkgsel/include` in the
-preseed plus the late command's single recommends-off apt transaction
-(kde-plasma-desktop, sddm, kwin-x11, kitty, qt-style-kvantum, plasma-nm,
-plasma-pa, systemsettings, kio-extras, kscreen, kmenuedit,
-breeze-gtk-theme, libpam-systemd, fastfetch) from the pinned trixie suite.
+preseed plus the late command's recommends-off apt transactions: the
+session (kde-plasma-desktop, sddm, kwin-x11, kitty, qt-style-kvantum,
+plasma-nm, plasma-pa, systemsettings, kio-extras, kscreen, kmenuedit,
+breeze-gtk-theme, libpam-systemd, fastfetch) and the applications, plus
+the pinned SimpleX package's dependencies, all from the live Debian trixie suite at build time (not a
+snapshot; versions recorded in `/usr/share/ombra/packages.txt`).
 Vendored asset provenance is in `usr/share/ombra-assets/README.md`.
 
 The session is KDE Plasma on X11 (SDDM, Plasma X11 session).
@@ -33,8 +35,9 @@ Hostname is `ombra`, set in the preseed and repaired by the late command.
 | `etc/network/interfaces` | Loopback only, so NetworkManager manages the NIC |
 | `etc/NetworkManager/system-connections/ombra-intnet.nmconnection` | Static 10.55.10.100/24, gateway and DNS 10.55.10.1, IPv6 off, matches any ethernet device (no MAC pin); must be mode 600 or NetworkManager ignores it |
 | `etc/NetworkManager/conf.d/10-ombra-no-auto-default.conf` | `no-auto-default=*`: no auto-created DHCP profile that could route around the gateway |
-| `etc/nftables.conf` | The desktop's own firewall: input, output and forward policy drop; the private link and ICMP echo are the accepts |
-| `etc/sysctl.d/60-ombra-desktop.conf` | Kernel hardening and IPv6 off; no oops-limit pinning, so a panic stays on screen |
+| `etc/nftables.conf` | The desktop's own firewall: input, output and forward policy drop; the private link and ICMP echo are the accepts. The single VM edition replaces it with `desktop/single/etc/nftables.conf` |
+| `etc/systemd/system/nftables.service.d/10-ombra-keep.conf` | Empty `ExecStop=`: the ruleset stays loaded through shutdown instead of being flushed while the network is still up |
+| `etc/sysctl.d/60-ombra-desktop.conf` | Kernel hardening and IPv6 off (the IPv6 keys carry a `-` prefix: `ipv6.disable=1` on the kernel line removes them); no oops-limit pinning, so a panic stays on screen |
 | `usr/local/sbin/ombra-timesync` + timer | Tor-only clock sync; writes `ok` or `stale` to `/run/ombra/timesync` for `ombra-statusd` |
 
 There is deliberately no `etc/resolv.conf` (the resolver comes from the
@@ -46,9 +49,10 @@ is the only network manager on the desktop).
 | Path | What it is |
 |------|------------|
 | `usr/local/libexec/ombra/*`, `etc/systemd/system/ombra-*.service` | The branded LUKS unlock and the first-use setup that owns tty1 before SDDM |
-| `etc/systemd/system/sddm.service.d/10-ombra-firstuse.conf` | SDDM is gated on `/run/ombra/setup-complete`, which `ombra-setup-gate` re-proves against the LUKS header every boot |
+| `etc/systemd/system/sddm.service.d/10-ombra-firstuse.conf` | SDDM is gated on `/run/ombra/setup-complete`, which `ombra-setup-gate` re-proves every boot: when the unlock agent recorded in this boot's tmpfs (`/run/ombra/gate/build-key-dead`, tied to the boot id and device) that the build passphrase did not open the disk, the gate uses that record instead of a second argon2id derivation; otherwise it tests the LUKS header itself |
+| `etc/systemd/system/kact-wipe.service`, `home-ombra-.local-share-kactivitymanagerd-resources.mount` | KActivities database on a boot-wiped tmpfs. The wipe runs as `ombra`, not root (the path is user-owned, so a planted symlink could otherwise redirect a root `rm`), and fails, keeping the mount down, if any component of the path is a symlink |
 | `etc/sddm.conf.d/50-ombra.conf` | X11 display server, Colloid-dark greeter theme, no autologin; sets no `Session=` key because sddm has no such key |
-| `etc/default/grub.d/50-ombra.cfg`, `99-ombra-brand.cfg` | Kernel hardening set (never `init_on_free`) and GRUB branding; the boot menu has no timeout |
+| `etc/default/grub.d/50-ombra.cfg`, `99-ombra-brand.cfg` | Kernel hardening set (never `init_on_free`), `ipv6.disable=1`, and GRUB branding; the boot menu has no timeout |
 | `etc/grub.d/09_ombra`, `boot/grub/themes/ombra/` | The only boot-entry generator (Persistent and Amnesic) and its theme |
 | `etc/overlayroot.conf`, `etc/systemd/system/systemd-remount-fs.service.d/` | Overlay defaults (persistent) and the remount drop-in for overlayfs |
 | `etc/modprobe.d/ombra-blacklist.conf` | Blacklist of rare filesystems, bluetooth, exotic protocols and absent hardware |
@@ -61,7 +65,7 @@ is the only network manager on the desktop).
 | `etc/systemd/system/ombra-kwin-compositing.service`, `usr/local/sbin/ombra-kwin-compositing` | Writes `/etc/xdg/kwinrc` with `[Compositing] Enabled=false` on a QEMU guest (UTM) and removes it elsewhere; software-rendered GL compositing stalls on a screen resize |
 | `etc/skel/.config/plasma-*` (absent) | The layout is generated at first login from the look-and-feel `contents/layouts/org.kde.plasma.desktop-layout.js`; that filename is what the loader asks for, and its launchers value must be a JS array |
 | `etc/skel/.config/baloofilerc` | Baloo file indexer off |
-| `etc/skel/.config/kscreenlockerrc` | 10-minute idle lock, lock on resume, lock-screen wallpaper pinned to `ombra-02-4k` |
+| `etc/skel/.config/kscreenlockerrc` | 10-minute idle lock, lock on resume, lock-screen wallpaper pinned to `ombra-ink-4k.jpg` |
 | `etc/skel/.config/klipperrc` | `KeepClipboardContents=false`, `MaxClipItems=1` (KConfigXT clamps 0 to 1) |
 | `etc/skel/.local/state/UserFeedback.org.kde.plasmashell`, `.config/KDE/UserFeedback.conf` | KDE telemetry off, prompt suppressed |
 | `etc/skel/.config/kitty/kitty.conf` | Ombra palette, JetBrains Mono Nerd Font, ligatures disabled (they fuse the ring art's `==`, `-=`, `+=` runs) |
@@ -70,6 +74,7 @@ is the only network manager on the desktop).
 | `etc/skel/.config/systemd/user/ombra-statusd.service`, `.config/autostart/org.ombra.status-ensure.desktop` | Start the Tor-status daemon with the session |
 | `etc/xdg/autostart/org.kde.discover.notifier.desktop`, `org.kde.kdeconnect.daemon.desktop` | `Hidden=true` tombstones under upstream's filenames; the late command also purges and masks both |
 | `usr/share/plasma/plasmoids/org.kde.plasma.clipboard/metadata.json` | Ombra override of KDE's clipboard applet metadata: tray category removed, `EnabledByDefault=false`, so klipper never runs and history is never written |
+| `usr/local/bin/kitty` | Wrapper that every kitty launch reaches (`/usr/local/bin` precedes `/usr/bin`): sets `LIBGL_ALWAYS_SOFTWARE=1`, because on Fusion's 3D device kitty drew its text near-black; KWin stays on the hardware device |
 | `usr/local/share/applications/kitty.desktop`, `tor-browser.desktop` | Launcher overrides by XDG precedence; Tor Browser uses an absolute icon path and `StartupWMClass` so the dock shows one tile |
 
 ## Plasma plasmoids
@@ -88,10 +93,10 @@ is the only network manager on the desktop).
 | `usr/share/aurorae/themes/Colloid-dark{,-round}/` | Window decorations |
 | `usr/share/color-schemes/ColloidDark.colors` | Color scheme |
 | `usr/share/Kvantum/ColloidDark/` | Kvantum Qt theme |
-| `usr/share/sddm/themes/Colloid-dark/` | SDDM greeter (Qt6 variant) with `ombra-02-4k` as `background.png` |
+| `usr/share/sddm/themes/Colloid-dark/` | SDDM greeter (Qt6 variant); its `background.jpg` (set in `theme.conf`) is Ombra's |
 | `usr/share/icons/Kaze-dark/`, `usr/share/icons/phinger-cursors-light/` | Icon and cursor themes |
 | `usr/share/fonts/ombra/jetbrainsmono-nerdfont/` | JetBrains Mono Nerd Font core weights with OFL text; Noto Sans comes from `fonts-noto-core` |
-| `usr/share/backgrounds/ombra/*`, `usr/share/wallpapers/Colloid-dark/` | Ombra wallpapers; `ombra-02-4k` is the session wallpaper |
+| `usr/share/backgrounds/ombra/*`, `usr/share/wallpapers/Colloid-dark/` | Ombra wallpapers; `ombra-ink-4k.jpg` is the session wallpaper (set by the look-and-feel layout script) |
 | `usr/local/bin/ombra`, `ombra-statusd` | Connectivity panel and Tor-status daemon (`core/` crate); the daemon caches for 30 s and serves JSON on `$XDG_RUNTIME_DIR/ombra-status.sock` |
 
 ## Not shipped
@@ -101,4 +106,3 @@ is the only network manager on the desktop).
 | powerdevil | Not installed by the session transaction: no suspend daemon (a suspended VM cannot reliably wake under Fusion on Apple Silicon), so no screen blanking |
 | xdg-desktop-portal-* | No portal-dependent workflow exists in the image |
 | Colloid-gtk-theme | Only two small GTK apps ship; `settings.ini` covers them |
-| Crypto wallets | By decision; adding one needs a new pin and a new verification pass |
