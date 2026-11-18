@@ -13,6 +13,7 @@ pin() { awk -F= -v k="$2" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$REPO/b
 mkdir -p "$OUT"
 {
   now=$(date +%s)
+  echo "type=apps"
   echo "issued=$now"
   echo "expires=$(( now + DAYS * 86400 ))"
   for a in torbrowser feather simplex electrum; do

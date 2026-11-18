@@ -4,7 +4,8 @@
 #         single=out/ombra-single-1.2.update
 # Writes <out-dir>/latest.txt and latest.txt.sig. Upload the bundles first, then both index files, to the updates/
 # folder (scripts/upload-r2.sh --prefix updates/ does that order). Fields: expires (machines refuse the index after
-# it), issued (machines that saw a newer index refuse an older one), and per role version, bundle, sha256, size.
+# it), issued (machines that saw a newer index refuse an older one), type=index (so the app list, signed with the same
+# key, cannot stand in for it), and per role version, bundle, sha256, size.
 set -euo pipefail
 [ $# -ge 4 ] || { echo "usage: make-index.sh <private-key> <out-dir> <valid-days> <role=bundle>..." >&2; exit 2; }
 KEY=$1; OUT=$2; DAYS=$3; shift 3
@@ -13,6 +14,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$OUT"
 {
   now=$(date +%s)
+  echo "type=index"
   echo "issued=$now"
   echo "expires=$(( now + DAYS * 86400 ))"
   for a in "$@"; do

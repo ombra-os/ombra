@@ -118,6 +118,8 @@ fetch_index() { # sets IDX to a verified index file; 1 unreachable, 2 bad signat
     [ "$c" = 0 ] || return 1
     fetch "$BASE_URL/latest.txt.sig" "$IDX.sig.new" "$INDEX_MAX" || { rm -f "$IDX.new"; return 1; }
     verify "$IDX.new" "$IDX.sig.new" || { rm -f "$IDX.new" "$IDX.sig.new"; return 2; }
+    # both lists carry the same key's signature: each names what it is, so one cannot stand in for the other
+    [ "$(kv "$IDX.new" type)" = index ] || { rm -f "$IDX.new" "$IDX.sig.new"; return 2; }
     # replay: a signed index older than one this machine already accepted is refused; an index without `issued`
     # is only taken while none has been seen (indexes before 1.2 carry none)
     iss=$(kv "$IDX.new" issued); last=$(cat "$STATE/issued" 2>/dev/null)
@@ -501,6 +503,7 @@ fetch_apps() { # sets AIDX to a verified app list; 1 unreachable, 2 bad signatur
     [ "$c" = 0 ] || return 1
     fetch "$BASE_URL/apps.txt.sig" "$AIDX.sig.new" "$INDEX_MAX" || { rm -f "$AIDX.new"; return 1; }
     verify "$AIDX.new" "$AIDX.sig.new" || { rm -f "$AIDX.new" "$AIDX.sig.new"; return 2; }
+    [ "$(kv "$AIDX.new" type)" = apps ] || { rm -f "$AIDX.new" "$AIDX.sig.new"; return 2; }
     iss=$(kv "$AIDX.new" issued); last=$(cat "$STATE/apps-issued" 2>/dev/null)
     is_num "$iss" || { rm -f "$AIDX.new" "$AIDX.sig.new"; return 2; }
     is_num "$last" && [ "$iss" -lt "$last" ] && { rm -f "$AIDX.new" "$AIDX.sig.new"; return 4; }
@@ -547,6 +550,7 @@ apps_pending() { # needs a verified AIDX: "<app> <version>" for each listed app 
 
 apps_check() { # desktop only, never fatal: writes /run/ombra/apps (one "<app> <version>" line per update) or removes it
     [ "$ROLE" = desktop ] || return 0
+    app_recover
     rc=0; fetch_apps || rc=$?
     mkdir -p "$RUNDIR"
     case "$rc" in
@@ -565,11 +569,31 @@ fetch_app() { # url dest max-bytes: like fetch, following redirects (release dow
     rm -f "$2"; return 22
 }
 
-swap_dir() { # new-dir target: the new tree replaces the target in two renames
-    rm -rf "$2.old"
+swap_dir() { # new-dir target: the new tree replaces the target in two renames (app_recover finishes a cut-off swap)
+    rm -rf "$2.old"; [ ! -e "$2.old" ] || return 1
+    sync
     [ ! -e "$2" ] || mv "$2" "$2.old" || return 1
     mv "$1" "$2" || { [ ! -e "$2.old" ] || mv "$2.old" "$2"; return 1; }
+    sync
     rm -rf "$2.old"
+    return 0
+}
+
+TB_DATA=Browser/TorBrowser/Data
+app_recover() { # finish or undo an app swap that a power cut interrupted; root only, never fatal
+    [ "$(id -u)" = 0 ] || return 0
+    for d in /opt/tor-browser /opt/feather /opt/electrum; do
+        [ -e "$d" ] || [ ! -d "$d.old" ] || mv "$d.old" "$d" || continue
+        # the browser profile moved into the new tree before the swap: give it back to whichever tree is in place
+        if [ -d "$d.next/$TB_DATA" ] && [ -d "$d" ] && [ ! -e "$d/$TB_DATA" ]; then
+            mkdir -p "$d/Browser/TorBrowser" && mv "$d.next/$TB_DATA" "$d/$TB_DATA"
+        fi
+        for x in "$d.next" "$d.old"; do   # leftovers go only when the app is in place and they hold no profile
+            [ -e "$x" ] && [ -e "$d" ] && [ ! -e "$x/$TB_DATA" ] && rm -rf "$x"
+        done
+    done
+    rm -rf "$STATE/feather.work"
+    return 0
 }
 
 install_torbrowser() { # file version
@@ -578,23 +602,27 @@ install_torbrowser() { # file version
     tar -xJf "$1" -C "$N" --strip-components=1 --no-same-owner 2>/dev/null && [ -e "$N/Browser/firefox" ] || { rm -rf "$N"; return 1; }
     chmod -R a+rX "$N"
     rm -rf "$N/Browser/TorBrowser/Data"
-    mkdir -p "$N/Browser/distribution"
-    [ ! -f "$O/Browser/distribution/policies.json" ] || cp -p "$O/Browser/distribution/policies.json" "$N/Browser/distribution/"
+    mkdir -p "$N/Browser/distribution" || { rm -rf "$N"; return 1; }
+    if [ -f "$O/Browser/distribution/policies.json" ]; then
+        cp -p "$O/Browser/distribution/policies.json" "$N/Browser/distribution/" || { rm -rf "$N"; return 1; }
+    fi
     # the profile (bookmarks, settings, Ombra's proxy preset) moves across unchanged: one rename on the same disk
-    if [ -d "$O/Browser/TorBrowser/Data" ]; then
-        mkdir -p "$N/Browser/TorBrowser"
-        mv "$O/Browser/TorBrowser/Data" "$N/Browser/TorBrowser/Data" || { rm -rf "$N"; return 1; }
+    if [ -d "$O/$TB_DATA" ]; then
+        mkdir -p "$N/Browser/TorBrowser" || { rm -rf "$N"; return 1; }
+        mv "$O/$TB_DATA" "$N/$TB_DATA" || { rm -rf "$N"; return 1; }
     fi
     if ! swap_dir "$N" "$O"; then
-        [ ! -d "$N/Browser/TorBrowser/Data" ] || mv "$N/Browser/TorBrowser/Data" "$O/Browser/TorBrowser/Data"
+        # never delete a tree that still holds the profile; app_recover puts it back at the next check
+        if [ -d "$N/$TB_DATA" ]; then mv "$N/$TB_DATA" "$O/$TB_DATA" || return 1; fi
         rm -rf "$N"; return 1
     fi
     [ ! -f "$O/Browser/browser/chrome/icons/default/default48.png" ] \
-        || cp "$O/Browser/browser/chrome/icons/default/default48.png" /usr/share/icons/hicolor/48x48/apps/tor-browser.png
+        || cp "$O/Browser/browser/chrome/icons/default/default48.png" /usr/share/icons/hicolor/48x48/apps/tor-browser.png || true
+    return 0
 }
 
 install_feather() { # file version
-    W=/var/tmp/ombra-feather; rm -rf "$W"; mkdir -p "$W"
+    W="$STATE/feather.work"; rm -rf "$W"; mkdir -p "$W" || return 1
     cp "$1" "$W/f.AppImage" && chmod 0755 "$W/f.AppImage" || { rm -rf "$W"; return 1; }
     (cd "$W" && ./f.AppImage --appimage-extract >/dev/null 2>&1)
     [ -x "$W/squashfs-root/usr/bin/feather" ] || { rm -rf "$W"; return 1; }
@@ -650,6 +678,13 @@ cmd_apps() {
     root_writable || die "this boot is Amnesic (or the disk is read-only): restart in Persistent mode to update apps"
     [ ! -e "$STATE/applying" ] || die "the last update did not finish: run ombra-update rollback first"
     [ -n "$BASE_URL" ] || die "no update URL configured"
+    for a in "$@"; do case " $APPS " in *" $a "*) ;; *) die "unknown app: $a (one of: $APPS)" ;; esac; done
+    # while an update's rollback point is kept, app files land in it too: keep room for the rollback itself
+    if lvs "$VG/$SNAP" >/dev/null 2>&1; then
+        used=$(lvs --noheadings -o data_percent "$VG/$SNAP" 2>/dev/null | tr -d ' ' | cut -d. -f1)
+        [ "${used:-100}" -lt 50 ] 2>/dev/null || die "the last update's rollback point is filling up: restart, wait ten minutes, then update apps"
+    fi
+    app_recover
     rc=0; fetch_apps || rc=$?
     case "$rc" in 0) ;; 2) die "the app list failed its signature check; nothing was installed" ;; 3) die "no app list is published" ;; 4) die "the app list is out of date; nothing was installed" ;; *) die_code 75 "could not reach the update server through Tor; nothing was installed" ;; esac
     want="$*"
@@ -665,7 +700,9 @@ cmd_apps() {
         free=$(free_kb "$STATE"); need=$((4 * (size / 1024 + 1) + 524288))
         [ "$free" -gt "$need" ] 2>/dev/null || { say "failed $name: not enough free space (need $((need / 1024)) MB)"; fail_n=$((fail_n + 1)); continue; }
         say "Downloading $name $v through Tor"
-        F="$STATE/app-$a"; rm -f "$F"
+        # apt and dpkg take a local package only by a .deb name; the archives keep their own extensions too
+        case "$a" in simplex) F="$STATE/app-$a.deb" ;; torbrowser) F="$STATE/app-$a.tar.xz" ;; electrum) F="$STATE/app-$a.tar.gz" ;; *) F="$STATE/app-$a" ;; esac
+        rm -f "$F"
         if ! fetch_app "$url" "$F" "$size"; then
             u2=$(kv "$AIDX" "$a.url2")
             if ! { valid_value "${u2:-}" && case "$u2" in https://*) true ;; *) false ;; esac && fetch_app "$u2" "$F" "$size"; }; then
@@ -673,7 +710,7 @@ cmd_apps() {
             fi
         fi
         [ "$(sha "$F")" = "$sum" ] || { rm -f "$F"; say "failed $name: the download does not match the signed app list"; fail_n=$((fail_n + 1)); continue; }
-        if "install_$a" "$F" "$v"; then say "installed $name $v"; done_n=$((done_n + 1)); else say "failed $name: it could not be installed; the previous version stays"; fail_n=$((fail_n + 1)); fi
+        if "install_$a" "$F" "$v" </dev/null; then say "installed $name $v"; done_n=$((done_n + 1)); else say "failed $name: it could not be installed; the previous version stays"; fail_n=$((fail_n + 1)); fi
         rm -f "$F"
     done < "$STATE/apps.todo"
     rm -f "$STATE/apps.todo"
@@ -688,6 +725,10 @@ cmd_apps() {
 cmd_rollback_now() {
     if [ "$ROLE" = desktop ]; then
         lvs "$VG/$SNAP" >/dev/null 2>&1 || { say "no rollback point"; return 1; }
+        # an overflowed snapshot is invalid (attribute I): merging it would not bring the old system back
+        case "$(lvs --noheadings -o lv_attr "$VG/$SNAP" 2>/dev/null | tr -d ' ')" in
+            ????I*) say "the rollback point overflowed and cannot be used"; return 1 ;;
+        esac
         # /boot first: it is restored in place and can be retried; the merge happens at the next boot
         boot_restore || return 1
         lvconvert --merge "$VG/$SNAP" >/dev/null 2>&1 || { say "could not schedule the rollback (lvconvert --merge failed)"; return 1; }

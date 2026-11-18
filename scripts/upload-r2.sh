@@ -6,7 +6,8 @@
 #          Every archive SHA256SUMS.txt names must be here and match; a missing .sig is warned about loudly
 #          (scripts/update/sign-sums.sh writes it), a .sig that does not verify against build/update-pubkey.pem stops it.
 #        bash scripts/upload-r2.sh --prefix updates/ [file ...]
-#          update files only (*.update, latest.txt, latest.txt.sig; default: build/releases/updates/), uploaded under
+#          update files only (*.update, latest.txt, apps.txt and their .sig; apps.txt alone for an app-only release;
+#          default: build/releases/updates/), uploaded under
 #          updates/: bundles first, then the index and its signature back to back. The index signature and every
 #          bundle it names are checked first; the SHA256SUMS check does not apply.
 # Settings come from an env file (default build/local/r2.env, git-ignored; override with R2_ENV_FILE):
@@ -86,14 +87,19 @@ else
       *) echo "FATAL: $f is not an update file (*.update, latest.txt, apps.txt and their .sig)" >&2; exit 1 ;;
     esac
   done
-  [ -n "$IDX" ] && [ -n "$IDXSIG" ] || { echo "FATAL: --prefix updates/ needs latest.txt and latest.txt.sig" >&2; exit 1; }
-  ed25519_ok "$IDX" "$IDXSIG" || { echo "FATAL: latest.txt.sig does not verify against build/update-pubkey.pem" >&2; exit 1; }
+  # an app-only release uploads apps.txt and its .sig alone; anything else needs the index pair
+  if [ -n "$IDX$IDXSIG" ] || [ "${#BUNDLES[@]}" -gt 0 ] || [ -z "$APPS$APPSSIG" ]; then
+    [ -n "$IDX" ] && [ -n "$IDXSIG" ] || { echo "FATAL: --prefix updates/ needs latest.txt and latest.txt.sig" >&2; exit 1; }
+    ed25519_ok "$IDX" "$IDXSIG" || { echo "FATAL: latest.txt.sig does not verify against build/update-pubkey.pem" >&2; exit 1; }
+    grep -qx 'type=index' "$IDX" || { echo "FATAL: latest.txt has no type=index line (make it with make-index.sh)" >&2; exit 1; }
+  fi
   if [ -n "$APPS$APPSSIG" ]; then
     [ -n "$APPS" ] && [ -n "$APPSSIG" ] || { echo "FATAL: apps.txt and apps.txt.sig go together" >&2; exit 1; }
     ed25519_ok "$APPS" "$APPSSIG" || { echo "FATAL: apps.txt.sig does not verify against build/update-pubkey.pem" >&2; exit 1; }
+    grep -qx 'type=apps' "$APPS" || { echo "FATAL: apps.txt has no type=apps line (make it with make-apps.sh)" >&2; exit 1; }
   fi
   # every bundle the index names must be uploaded in this run and match the index
-  for key in $(awk -F= '$1 ~ /\.bundle$/ {print $1}' "$IDX"); do
+  for key in $( [ -z "$IDX" ] || awk -F= '$1 ~ /\.bundle$/ {print $1}' "$IDX"); do
     role=${key%.bundle}; name=$(awk -F= -v k="$key" '$1==k{print $2}' "$IDX"); want=$(awk -F= -v k="$role.sha256" '$1==k{print $2}' "$IDX")
     hit=""
     for b in ${BUNDLES[@]+"${BUNDLES[@]}"}; do [ "$(basename "$b")" = "$name" ] && hit=$b; done
@@ -101,7 +107,8 @@ else
     [ "$(shasum -a 256 "$hit" | cut -d' ' -f1)" = "$want" ] || { echo "FATAL: $name does not match latest.txt" >&2; exit 1; }
   done
   # bundles first, so the index never names a file that is not there yet
-  FILES=(${BUNDLES[@]+"${BUNDLES[@]}"} "$IDX" "$IDXSIG")
+  FILES=(${BUNDLES[@]+"${BUNDLES[@]}"})
+  [ -z "$IDX" ] || FILES+=("$IDX" "$IDXSIG")
   [ -z "$APPS" ] || FILES+=("$APPS" "$APPSSIG")
 fi
 

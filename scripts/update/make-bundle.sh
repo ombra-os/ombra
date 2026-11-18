@@ -18,7 +18,7 @@ if [ -e "$GI" ] || [ -e "$GS" ]; then
 fi
 [[ "$VER" =~ ^[0-9][0-9A-Za-z.+~-]*$ ]] || { echo "bad version" >&2; exit 2; }
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
-COPYFILE_DISABLE=1 tar -czf "$T/payload.tar.gz" --no-xattrs --no-mac-metadata --uid 0 --gid 0 --exclude '._*' --exclude .DS_Store -C "$SRC" .
+COPYFILE_DISABLE=1 tar -czf "$T/payload.tar.gz" --no-xattrs --no-mac-metadata --uid 0 --gid 0 --uname root --gname root --exclude '._*' --exclude .DS_Store -C "$SRC" .
 cat > "$T/manifest" <<EOM
 role=$ROLE
 version=$VER
@@ -28,6 +28,6 @@ EOM
 bash "$HERE/sign.sh" "$KEY" "$T/manifest" >/dev/null
 mkdir -p "$OUT"
 F="$OUT/ombra-$ROLE-$VER.update"
-COPYFILE_DISABLE=1 tar -cf "$F" --no-xattrs --no-mac-metadata -C "$T" manifest manifest.sig payload.tar.gz
+COPYFILE_DISABLE=1 tar -cf "$F" --no-xattrs --no-mac-metadata --uid 0 --gid 0 --uname root --gname root -C "$T" manifest manifest.sig payload.tar.gz
 echo "$F"
 shasum -a 256 "$F"

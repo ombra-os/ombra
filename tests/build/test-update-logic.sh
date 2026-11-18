@@ -73,6 +73,8 @@ cat > "$S/apt-get" <<'EOF'
 # Debian's mirror as seen through Tor: lists, a plan (FAKE_APT_PLAN), download sizes, and an upgrade that touches /boot
 PATH=/usr/bin:/bin
 echo "apt-get $*" >> "$APT_LOG"
+# like apt: a local package is only taken by a path ending in .deb (anything else is looked up as a package name)
+for a in "$@"; do case "$a" in /*) case "$a" in *.deb) ;; *) echo "E: Unable to locate package $a"; exit 100 ;; esac ;; esac; done
 sim=""; uris=""; cmd=""
 for a in "$@"; do case "$a" in -s) sim=1 ;; --print-uris) uris=1 ;; update|upgrade) cmd=$a ;; esac; done
 case "$cmd" in
@@ -170,8 +172,8 @@ reset_root() { # role version
 }
 run() { env PATH="$S:$PATH" "$SHELL_UNDER_TEST" "$U" "$@" > "$T/out" 2>&1; RC=$?; }
 state() { head -n1 "$R/run/ombra/update" 2>/dev/null; }
-index() { # writes and signs latest.txt from the given lines
-    printf '%s\n' "$@" > "$SRV/updates/latest.txt"; sign "$SRV/updates/latest.txt"
+index() { # writes and signs latest.txt from the given lines (type=index first unless the lines name a type)
+    { case "${1:-}" in type=*) ;; *) echo type=index ;; esac; printf '%s\n' "$@"; } > "$SRV/updates/latest.txt"; sign "$SRV/updates/latest.txt"
 }
 mkbundle() { # role version payload-dir out [payload.tar.gz to use as is]
     local d; d=$(mktemp -d "$T/b.XXXX")
@@ -405,8 +407,8 @@ printf '#!/bin/sh\n' > "$A/e/Electrum-4.8.3/run_electrum"
 COPYFILE_DISABLE=1 /usr/bin/tar -czf "$A/electrum.tar.gz" -C "$A/e" Electrum-4.8.3
 echo bin > "$A/tb/tor-browser/Browser/firefox"
 COPYFILE_DISABLE=1 /usr/bin/tar -cJf "$A/tb.tar.xz" -C "$A/tb" tor-browser
-apps_list() { # app list from lines, signed
-    printf '%s\n' "$@" > "$SRV/updates/apps.txt"; sign "$SRV/updates/apps.txt"
+apps_list() { # app list from lines, signed (type=apps first unless the lines name a type)
+    { case "${1:-}" in type=*) ;; *) echo type=apps ;; esac; printf '%s\n' "$@"; } > "$SRV/updates/apps.txt"; sign "$SRV/updates/apps.txt"
 }
 apps_root() {
     reset_root desktop 1.2.1; mkdir -p "$SRV/dl" "$R/opt/tor-browser/Browser/TorBrowser/Data/Browser" "$R/opt/tor-browser/Browser/distribution" "$R/var/tmp"
@@ -425,8 +427,27 @@ apps_list "issued=$((NOW - 100))" "expires=$((NOW + 86400))" "electrum.version=9
 run check; check "an app list older than one already seen is ignored" '[ "$(cat "$R/run/ombra/apps")" = "electrum 4.8.3" ]'
 apps_list "issued=$((NOW + 1))" "expires=$((NOW - 1))" "electrum.version=9.9"
 run check; check "an expired app list is ignored" '[ "$(cat "$R/run/ombra/apps")" = "electrum 4.8.3" ]'
+apps_list "type=index" "issued=$((NOW + 2))" "expires=$((NOW + 86400))" "electrum.version=9.9"
+run check; check "a signed list that is not an app list is refused as one" '[ "$(cat "$R/run/ombra/apps")" = "electrum 4.8.3" ]'
+cp "$SRV/updates/latest.txt" "$SRV/l.keep"; cp "$SRV/updates/latest.txt.sig" "$SRV/l.sig.keep"
+apps_list "issued=$((NOW + 5000))" "expires=$((NOW + 86400))" "desktop.version=9.9"
+cp "$SRV/updates/apps.txt" "$SRV/updates/latest.txt"; cp "$SRV/updates/apps.txt.sig" "$SRV/updates/latest.txt.sig"
+run check; check "the app list served as the index is refused and does not raise the replay floor" '[ "$RC" != 0 ] && [ "$(cat "$R/var/lib/ombra-update/issued")" != "$((NOW + 5000))" ]'
+cp "$SRV/l.keep" "$SRV/updates/latest.txt"; cp "$SRV/l.sig.keep" "$SRV/updates/latest.txt.sig"
 rm -f "$SRV/updates/apps.txt" "$SRV/updates/apps.txt.sig"
 run check; check "no app list published: no app updates" '[ ! -e "$R/run/ombra/apps" ]'
+
+# a power cut in the middle of the browser swap: the old tree sits in .old, the profile in .next
+apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))"
+mv "$R/opt/tor-browser" "$R/opt/tor-browser.old"; mkdir -p "$R/opt/tor-browser.next/Browser/TorBrowser"
+mv "$R/opt/tor-browser.old/Browser/TorBrowser/Data" "$R/opt/tor-browser.next/Browser/TorBrowser/Data"
+run check; check "an interrupted browser swap is undone at the next check, with the profile back in place" '[ "$(cat "$R/opt/tor-browser/Browser/TorBrowser/Data/Browser/places")" = bookmarks ] && [ ! -e "$R/opt/tor-browser.old" ] && [ ! -e "$R/opt/tor-browser.next" ]'
+apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))"
+mkdir -p "$R/opt/tor-browser.next/Browser/TorBrowser"
+mv "$R/opt/tor-browser/Browser/TorBrowser/Data" "$R/opt/tor-browser.next/Browser/TorBrowser/Data"
+run check; check "a cut before the swap moves the profile back into the installed browser" '[ "$(cat "$R/opt/tor-browser/Browser/TorBrowser/Data/Browser/places")" = bookmarks ] && [ ! -e "$R/opt/tor-browser.next" ]'
+apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))" $E
+run apps apply nosuchapp; check "an unknown app name is refused" '[ "$RC" != 0 ] && grep -q "unknown app" "$T/out" && [ ! -e "$R/opt/electrum" ]'
 
 apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))" $E
 run apps apply; check "apps apply installs Electrum into /opt/electrum with its version" '[ "$RC" = 0 ] && [ -f "$R/opt/electrum/run_electrum" ] && [ "$(cat "$R/opt/electrum/.ombra-version")" = 4.8.3 ] && grep -q "installed Electrum 4.8.3" "$T/out"'
@@ -452,6 +473,9 @@ run apps apply; check "an app download that is not https is refused" '[ "$RC" = 
 
 apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))" $E
 FAKE_FSTYPE=overlay run apps apply; check "app updates refuse an Amnesic boot" '[ "$RC" = 1 ] && [ ! -e "$R/opt/electrum" ]'
+apps_root; mkdir -p "$A/sx"; echo deb > "$A/sx/simplex.deb"; cp "$A/sx/simplex.deb" "$SRV/dl/simplex.deb"; mkdir -p "$R/opt/simplex/bin"; printf '#!/bin/sh\n' > "$R/opt/simplex/bin/simplex"; chmod 0755 "$R/opt/simplex/bin/simplex"
+apps_list "issued=$NOW" "expires=$((NOW + 86400))" "simplex.version=7.1.5" "simplex.url=https://upd.test/dl/simplex.deb" "simplex.sha256=$(h "$A/sx/simplex.deb")" "simplex.size=$(sz "$A/sx/simplex.deb")"
+run apps apply; check "a SimpleX update is installed with dpkg from a .deb file name" '[ "$RC" = 0 ] && grep -q "dpkg --force-confold -i .*app-simplex.deb" "$APT_LOG" && grep -q "installed SimpleX 7.1.5" "$T/out"'
 reset_root gateway 1.2; run apps apply; check "app updates are for the desktop" '[ "$RC" = 1 ]'
 
 [ "$FAILS" -eq 0 ] && echo "ALL PASS" || { echo "$FAILS FAILED"; exit 1; }

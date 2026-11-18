@@ -147,12 +147,19 @@ PY
   [ "$FAIL" = "$f0" ] && printf '%s  %s\n' "$(shasum -a 256 "$iso" | cut -d' ' -f1)" "$n" >> "$OKLIST"
 done
 
+# entries of a tar whose owner is not root (id 0, name root/wheel or empty)
+tar_owners() {
+  python3 -I -c 'import sys,tarfile
+print(sum(1 for m in tarfile.open(sys.argv[1]) if m.uid or m.gid or m.uname not in ("", "root") or m.gname not in ("", "root", "wheel")))' "$1"
+}
+
 # ---- update bundles --------------------------------------------------------------------------------------------------
 for u in "$R"/updates/*.update; do
   n="updates/$(basename "$u")"; f0=$FAIL
   tar -xf "$u" -C "$T" payload.tar.gz manifest 2>/dev/null || { fail "$n: unreadable"; continue; }
-  [ "$(python3 -I -c 'import sys,tarfile; print(sum(1 for m in tarfile.open(sys.argv[1]) if m.uid or m.gid))' "$T/payload.tar.gz")" = 0 ] \
-    && pass "$n: payload owned by root" || fail "$n: payload files owned by the builder"
+  # tar headers carry the owner's id and name: both the bundle itself and its payload must say root
+  [ "$(tar_owners "$u")" = 0 ] && pass "$n: bundle entries owned by root" || fail "$n: bundle entries carry the builder's owner"
+  [ "$(tar_owners "$T/payload.tar.gz")" = 0 ] && pass "$n: payload owned by root" || fail "$n: payload entries carry the builder's owner"
   [ "$(tar -tzf "$T/payload.tar.gz" | LC_ALL=C grep -c -E '(^|/)\._|__MACOSX|\.DS_Store' || true)" = 0 ] && pass "$n: no macOS litter" || fail "$n: macOS litter"
   gzip -dc "$T/payload.tar.gz" | scan "$n: payload" -
   scan "$n: manifest" "$T/manifest"

@@ -85,7 +85,7 @@ apps_update() {
         kdialog --title "$T" --sorry "App updates are ready, but this session is Amnesic, so they can't be installed.\n\nRestart, choose Persistent at the boot menu, and open Update Ombra again." 2>/dev/null
         exit 0
     fi
-    kdialog --title "$T" --yes-label "Update apps" --no-label "Not now" --yesno "Updates are ready for:\n\n$(apps_text)\n\nEach one comes from its own project through Tor and is checked against Ombra's signed list before anything changes. Your files, wallets, chats and bookmarks stay as they are, and no restart is needed.\n\nClose these apps first: an app that is open is left for later." 2>/dev/null || exit 0
+    kdialog --title "$T" --yes-label "Update apps" --no-label "Not now" --yesno "Updates are ready for:\n\n$(apps_text)\n\nEach one comes from its own project through Tor and is checked against Ombra's signed list before anything changes. Your files, wallets, chats and bookmarks stay as they are, and no restart is needed.\n\nClose these apps first: an app that is open is left for later." 2>/dev/null || return 0
     out=$(mktemp /tmp/ombra-update.XXXXXX); trap 'rm -f "$out"' EXIT
     kdialog --title "$T" --passivepopup "Updating apps through Tor. This takes a few minutes." 8 2>/dev/null &
     pkexec "$U" apps apply >"$out" 2>&1; rc=$?
@@ -93,7 +93,8 @@ apps_update() {
     skip_l=$(sed -n 's/^skipped \([^:]*\):.*/\1/p' "$out" | sed 's/^/    /')
     fail_l=$(sed -n 's/^failed //p' "$out" | sed 's/^/    /')
     case "$rc" in
-        0) kdialog --title "$T" --msgbox "Updated:\n\n$done_l\n\nOpen the apps as usual; they use the new versions." 2>/dev/null ;;
+        0) if [ -n "$done_l" ]; then kdialog --title "$T" --msgbox "Updated:\n\n$done_l\n\nOpen the apps as usual; they use the new versions." 2>/dev/null
+           else kdialog --title "$T" --msgbox "Your apps are up to date." 2>/dev/null; fi ;;
         6) kdialog --title "$T" --msgbox "${done_l:+Updated:\n\n$done_l\n\n}These were open, so they were left as they are:\n\n$skip_l\n\nClose them and open Update Ombra again." 2>/dev/null ;;
         126|127) kdialog --title "$T" --sorry "Nothing was started: the password was not accepted, or the window was closed." 2>/dev/null ;;
         75) kdialog --title "$T" --sorry "Ombra could not reach the update server through Tor just now. Nothing was changed.\n\nTry again in a few minutes." 2>/dev/null ;;
@@ -103,8 +104,8 @@ apps_update() {
 }
 
 state=$(head -n1 /run/ombra/update 2>/dev/null)
-# with no Ombra update waiting, app updates come first
-if [ "$state" != available ] && [ -s "$APPS_FILE" ]; then apps_update; fi
+# with Ombra itself up to date, app updates come first; "Not now" goes on to the usual window
+case "$state" in current|applied-security) [ ! -s "$APPS_FILE" ] || apps_update ;; esac
 ver=$(sed -n 2p /run/ombra/update 2>/dev/null)
 cur=$(cat /etc/ombra/version 2>/dev/null)
 case "$ver" in ''|*[!0-9A-Za-z.+~-]*) ver="" ;; esac

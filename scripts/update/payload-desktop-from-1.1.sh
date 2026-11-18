@@ -40,7 +40,7 @@ while read -r st f; do
     mkdir -p "$P/$(dirname "$rel")"
     cp "$T/$f" "$P/$rel"
     n=$((n + 1))
-done < <(git -C "$REPO" diff --name-status --diff-filter=AM "$FROM" "$TAG" -- desktop/rootfs update/rootfs)
+done < <(git -C "$REPO" diff --no-renames --name-status --diff-filter=AM "$FROM" "$TAG" -- desktop/rootfs update/rootfs)
 [ "$n" -gt 50 ] || fatal "only $n overlay files: the diff looks wrong"
 # the version files are written by the updater after the post steps
 rm -f "$P/etc/ombra/version"
@@ -83,8 +83,15 @@ for p in boot efi; do
     ex=""; [ "$p" = boot ] && mountpoint -q /boot/efi && ex=--exclude=./efi
     used=$(du -skx "$d" | awk '{print $1}'); free=$(df -Pk "$S" | awk 'NR==2 {print $4}')
     [ "$free" -gt $((used + 262144)) ] || { rm -f "$S/boot.tar" "$S/efi.tar"; echo "no room to copy $d" >&2; exit 1; }
-    tar -cf "$S/$p.tar" --one-file-system $ex -C "$d" .
+    # written beside, read back, then renamed: a half-written copy is never taken for a good one
+    rm -f "$S/$p.tar.tmp"
+    if tar -cf "$S/$p.tar.tmp" --one-file-system $ex -C "$d" . && tar -tf "$S/$p.tar.tmp" >/dev/null; then
+        mv "$S/$p.tar.tmp" "$S/$p.tar"
+    else
+        rm -f "$S/$p.tar.tmp" "$S/boot.tar" "$S/efi.tar"; echo "could not copy $d" >&2; exit 1
+    fi
 done
+sync
 STEP
 
 cat > "$L/post.d/10-system" <<'STEP'
@@ -120,7 +127,7 @@ cat > "$L/post.d/90-boot" <<'STEP'
 # (IPv6 off on the kernel line, Amnesic now also covers /home). On any failure /boot is put back as it was.
 set -eu
 S=/var/lib/ombra-update
-[ -f "$S/boot.tar" ] || { echo "no copy of /boot: the boot files stay as they were" >&2; exit 0; }
+[ -f "$S/boot.tar" ] && tar -tf "$S/boot.tar" >/dev/null 2>&1 || { echo "no readable copy of /boot: the boot files stay as they were" >&2; exit 0; }
 restore() {
     echo "boot files could not be updated; they stay as they were" >&2
     tar -xf "$S/boot.tar" -C /boot

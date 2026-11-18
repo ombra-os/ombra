@@ -39,8 +39,8 @@ while :; do
     else
         told=0
     fi
-    # app updates (no Ombra update waiting): said at once, then every six hours, like an Ombra update
-    if [ "$state" != available ] && [ -s /run/ombra/apps ]; then
+    # app updates (Ombra itself up to date, as Update Ombra offers them then): said at once, then every six hours
+    if { [ "$state" = current ] || [ "$state" = applied-security ]; } && [ -s /run/ombra/apps ]; then
         if [ "$atold" -eq 0 ] || [ "$atold" -ge 1080 ]; then
             notify system-software-update "App updates are available" "$(awk '{ n = $1; if (n == "torbrowser") n = "Tor Browser"; else if (n == "feather") n = "Feather"; else if (n == "simplex") n = "SimpleX"; else if (n == "electrum") n = "Electrum"; printf "%s%s %s", (NR > 1 ? ", " : ""), n, $2 }' /run/ombra/apps). Click here, or open Update Ombra."
             atold=0
