@@ -442,6 +442,11 @@ apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))"
 mv "$R/opt/tor-browser" "$R/opt/tor-browser.old"; mkdir -p "$R/opt/tor-browser.next/Browser/TorBrowser"
 mv "$R/opt/tor-browser.old/Browser/TorBrowser/Data" "$R/opt/tor-browser.next/Browser/TorBrowser/Data"
 run check; check "an interrupted browser swap is undone at the next check, with the profile back in place" '[ "$(cat "$R/opt/tor-browser/Browser/TorBrowser/Data/Browser/places")" = bookmarks ] && [ ! -e "$R/opt/tor-browser.old" ] && [ ! -e "$R/opt/tor-browser.next" ]'
+# the same picture while `apps apply` holds the lock is a swap in progress: the check must leave it alone
+apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))"
+mv "$R/opt/tor-browser" "$R/opt/tor-browser.old"; mkdir -p "$R/opt/tor-browser.next/Browser/TorBrowser"
+mv "$R/opt/tor-browser.old/Browser/TorBrowser/Data" "$R/opt/tor-browser.next/Browser/TorBrowser/Data"
+FAKE_LOCKED=1 run check; check "a check during an app update (lock held) does not touch the swap in progress" '[ "$RC" = 0 ] && [ ! -e "$R/opt/tor-browser" ] && [ -d "$R/opt/tor-browser.old/Browser" ] && [ "$(cat "$R/opt/tor-browser.next/Browser/TorBrowser/Data/Browser/places")" = bookmarks ]'
 apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))"
 mkdir -p "$R/opt/tor-browser.next/Browser/TorBrowser"
 mv "$R/opt/tor-browser/Browser/TorBrowser/Data" "$R/opt/tor-browser.next/Browser/TorBrowser/Data"
