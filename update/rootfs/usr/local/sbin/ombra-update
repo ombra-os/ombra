@@ -70,7 +70,9 @@ die() { printf 'ombra-update: %s\n' "$*" >&2; exit 1; }
 die_code() { c=$1; shift; printf 'ombra-update: %s\n' "$*" >&2; exit "$c"; }
 need_root() { [ "$(id -u)" = 0 ] || die "run as root (sudo ombra-update $1)"; }
 # apply, security, rollback and commit never run at the same time
+HAVE_LOCK=""
 take_lock() { command exec 9>"$LOCK" && flock -n 9 && HAVE_LOCK=1; }
+take_lock_wait() { command exec 9>"$LOCK" && flock -w 60 9 && HAVE_LOCK=1; }   # rides out a check's brief recovery
 
 fetch() { # url dest [max-bytes]; sets FETCH_CODE to the HTTP status; returns 1 on a transport failure, 22 on any non-200 answer
     if [ -n "${3:-}" ]; then
@@ -274,7 +276,7 @@ gw_image_ok() { # single edition: the container's image must match the checksum 
 
 cmd_apply() {
     need_root apply
-    take_lock || die "another ombra-update is running"
+    take_lock_wait || die "another ombra-update is running"
     root_writable || die "this boot is Amnesic (or the disk is read-only): restart in Persistent mode to update"
     [ -n "$BASE_URL" ] || die "no update URL configured"
     [ ! -e "$STATE/applying" ] || die "the last update did not finish: run ombra-update rollback first"
@@ -394,7 +396,7 @@ cmd_security() {
         die "the gateway cannot undo package upgrades (it has no volume manager). To install Debian's updates anyway, run: sudo ombra-update security --no-rollback"
     fi
     [ "$ROLE" = desktop ] && [ -n "$norb" ] && die_code 2 "the desktop always keeps a rollback point: run ombra-update security"
-    take_lock || die "another ombra-update is running"
+    take_lock_wait || die "another ombra-update is running"
     root_writable || die "this boot is Amnesic (or the disk is read-only): restart in Persistent mode to update"
     [ ! -e "$STATE/applying" ] || die "the last update did not finish: run ombra-update rollback first"
     [ ! -e "$STATE/pending" ] || die "an update is already waiting for a restart or a commit: restart first (it commits ten minutes after a healthy boot), or run ombra-update rollback"
@@ -519,7 +521,10 @@ app_installed() { # the installed version of an app, 0 when absent or unknown (a
     case "$1" in
         torbrowser) v=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' /opt/tor-browser/Browser/tbb_version.json 2>/dev/null | head -n1) ;;
         feather) v=$(cat /opt/feather/.ombra-version 2>/dev/null) ;;
-        simplex) v=$(dpkg-query -W -f '${Version}' simplex 2>/dev/null); v=${v%%-*} ;;
+        simplex) # a half-done install (power cut during dpkg) counts as absent, so it is offered again
+            if [ "$(dpkg-query -W -f '${Status}' simplex 2>/dev/null)" = "install ok installed" ]; then
+                v=$(dpkg-query -W -f '${Version}' simplex 2>/dev/null); v=${v%%-*}
+            fi ;;
         electrum)
             if [ -f /opt/electrum/.ombra-version ]; then v=$(cat /opt/electrum/.ombra-version)
             else v=$(dpkg-query -W -f '${Version}' electrum 2>/dev/null); v=${v%%+*}; v=${v%%-*}; fi ;;
@@ -572,7 +577,9 @@ fetch_app() { # url dest max-bytes: like fetch, following redirects (release dow
     rm -f "$2"; return 22
 }
 
+TB_DATA=Browser/TorBrowser/Data
 swap_dir() { # new-dir target: the new tree replaces the target in two renames (app_recover finishes a cut-off swap)
+    [ ! -e "$2.old/$TB_DATA" ] || return 1   # never delete a tree that still holds the browser profile
     rm -rf "$2.old"; [ ! -e "$2.old" ] || return 1
     sync
     [ ! -e "$2" ] || mv "$2" "$2.old" || return 1
@@ -582,7 +589,6 @@ swap_dir() { # new-dir target: the new tree replaces the target in two renames (
     return 0
 }
 
-TB_DATA=Browser/TorBrowser/Data
 app_recover() { # finish or undo an app swap that a power cut interrupted; root only, never fatal
     # only under the lock `apps apply` holds: a swap in progress looks exactly like an interrupted one
     [ "$(id -u)" = 0 ] || return 0
@@ -598,6 +604,9 @@ app_recover() { # finish or undo an app swap that a power cut interrupted; root 
         done
     done
     rm -rf "$STATE/feather.work"
+    # a SimpleX install cut off inside dpkg: let dpkg finish what it can (a reinstall is offered either way)
+    st=$(dpkg-query -W -f '${Status}' simplex 2>/dev/null)
+    [ -z "$st" ] || [ "$st" = "install ok installed" ] || sys dpkg --configure -a >/dev/null 2>&1 </dev/null || true
     return 0
 }
 
@@ -679,7 +688,7 @@ cmd_apps() {
     esac
     need_root apps
     [ "$ROLE" = desktop ] || die "app updates are for the desktop"
-    take_lock || die "another ombra-update is running"
+    take_lock_wait || die "another ombra-update is running"
     root_writable || die "this boot is Amnesic (or the disk is read-only): restart in Persistent mode to update apps"
     [ ! -e "$STATE/applying" ] || die "the last update did not finish: run ombra-update rollback first"
     [ -n "$BASE_URL" ] || die "no update URL configured"
@@ -715,6 +724,8 @@ cmd_apps() {
             fi
         fi
         [ "$(sha "$F")" = "$sum" ] || { rm -f "$F"; say "failed $name: the download does not match the signed app list"; fail_n=$((fail_n + 1)); continue; }
+        # the download can take minutes: the app may have been opened meanwhile
+        if app_running "$a"; then rm -f "$F"; say "skipped $name $v: close $name, then update again"; skip_n=$((skip_n + 1)); continue; fi
         if "install_$a" "$F" "$v" </dev/null; then say "installed $name $v"; done_n=$((done_n + 1)); else say "failed $name: it could not be installed; the previous version stays"; fail_n=$((fail_n + 1)); fi
         rm -f "$F"
     done < "$STATE/apps.todo"
@@ -751,7 +762,7 @@ cmd_rollback_now() {
 
 cmd_rollback() {
     need_root rollback
-    take_lock || die "another ombra-update is running"
+    take_lock_wait || die "another ombra-update is running"
     root_writable || die "restart in Persistent mode to roll back"
     if [ "$ROLE" = desktop ] && lvs "$VG/$SNAP" >/dev/null 2>&1; then
         when=$(date -r "$STATE/pending" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "an unknown time")
@@ -760,6 +771,7 @@ cmd_rollback() {
             say "Anything saved since then (files, wallets, chats, settings) is lost at the next restart."
         else
             say "Undoing returns the system to $when (the moment before the update). Your home folder is on its own volume and is not affected."
+            say "Apps updated since then go back too, and so do Tor Browser's bookmarks and settings (they live with the browser)."
         fi
     fi
     cmd_rollback_now || exit 1

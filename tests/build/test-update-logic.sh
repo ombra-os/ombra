@@ -102,11 +102,13 @@ cat > "$S/dpkg-query" <<'EOF'
 # -W -f '${Version}' <pkg>: FAKE_VER_<pkg>; -W -f '${Status}' <pkg>: installed unless named in FAKE_MISSING
 eval "p=\${$#}"
 case "$*" in
-    *Status*) case " ${FAKE_MISSING:-} " in *" $p "*) exit 1 ;; esac; printf 'install ok installed' ;;
+    *Status*) case " ${FAKE_MISSING:-} " in *" $p "*) exit 1 ;; esac
+              case " ${FAKE_HALF:-} " in *" $p "*) printf 'install reinstreq half-installed'; exit 0 ;; esac
+              printf 'install ok installed' ;;
     *) v=$(eval "printf '%s' \"\${FAKE_VER_$(printf '%s' "$p" | tr -c 'a-z0-9\n' _):-}\""); [ -n "$v" ] || exit 1; printf '%s' "$v" ;;
 esac
 EOF
-printf '#!/bin/sh\ncase "$*" in *"${FAKE_RUNNING:-@none@}"*) exit 0 ;; esac\nexit 1\n' > "$S/pgrep"
+printf '#!/bin/sh\n[ -z "${FAKE_RUN_FILE:-}" ] || [ ! -e "$FAKE_RUN_FILE" ] || exit 0\ncase "$*" in *"${FAKE_RUNNING:-@none@}"*) exit 0 ;; esac\nexit 1\n' > "$S/pgrep"
 printf '#!/bin/sh\necho 0\n' > "$S/id"
 printf '#!/bin/sh\n[ -z "${FAKE_LOCKED:-}" ]\n' > "$S/flock"
 printf '#!/bin/sh\nshasum -a 256 "$@"\n' > "$S/sha256sum"
@@ -451,6 +453,13 @@ apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))"
 mkdir -p "$R/opt/tor-browser.next/Browser/TorBrowser"
 mv "$R/opt/tor-browser/Browser/TorBrowser/Data" "$R/opt/tor-browser.next/Browser/TorBrowser/Data"
 run check; check "a cut before the swap moves the profile back into the installed browser" '[ "$(cat "$R/opt/tor-browser/Browser/TorBrowser/Data/Browser/places")" = bookmarks ] && [ ! -e "$R/opt/tor-browser.next" ]'
+apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))" $E
+mkdir -p "$R/opt/electrum"; echo old > "$R/opt/electrum/run_electrum"
+FAKE_RUN_FILE="$R/var/lib/ombra-update/app-electrum.tar.gz" run apps apply
+check "an app opened while its download ran is left for later, unchanged (exit 6)" '[ "$RC" = 6 ] && [ "$(cat "$R/opt/electrum/run_electrum")" = old ] && [ ! -e "$R/var/lib/ombra-update/app-electrum.tar.gz" ]'
+apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))" "simplex.version=7.1.4"
+FAKE_HALF=simplex run check; check "a SimpleX install cut off inside dpkg is offered again" '[ "$(cat "$R/run/ombra/apps")" = "simplex 7.1.4" ]'
+run check; check "a complete SimpleX install of the listed version is not offered" '[ ! -s "$R/run/ombra/apps" ]'
 apps_root; apps_list "issued=$NOW" "expires=$((NOW + 86400))" $E
 run apps apply nosuchapp; check "an unknown app name is refused" '[ "$RC" != 0 ] && grep -q "unknown app" "$T/out" && [ ! -e "$R/opt/electrum" ]'
 
