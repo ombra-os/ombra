@@ -43,7 +43,8 @@ if [ -f "$REPO/build/local/r2.env" ]; then
   ( set -a; . "$REPO/build/local/r2.env"; set +a
     for v in "${R2_ACCESS_KEY_ID:-}" "${R2_SECRET_ACCESS_KEY:-}" "${R2_ENDPOINT:-}"; do add "$v"; done )
 fi
-for f in "$HOME"/ombra-update-keys*/update-signing.key; do sed -n '2p' "$f" >> "$P"; done
+# the signing key's own text, if its location is given (OMBRA_SIGNING_KEY): a leaked key file would show up here
+[ -z "${OMBRA_SIGNING_KEY:-}" ] || [ ! -f "$OMBRA_SIGNING_KEY" ] || sed -n '2p' "$OMBRA_SIGNING_KEY" >> "$P"
 sort -u -o "$P" "$P"
 # address patterns: this Mac's own LAN addresses, and every address in its VMware networks (where installs ran)
 E="$T/regex"; : > "$E"
