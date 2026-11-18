@@ -18,7 +18,7 @@
 | Edition | What it is | Ships as |
 |---|---|---|
 | Two VMs (default) | Gateway VM + desktop VM: the hypervisor separates Tor's side from your apps | Prebuilt VM archives for Fusion and UTM |
-| Single VM | One VM: the gateway runs as a container inside the desktop. Easier, weaker isolation ([comparison](docs/THREAT_MODEL.md#two-vms-vs-single-vm)) | An installer ISO for a VM you create; tested on Fusion, untested on UTM |
+| Single VM | One VM: the gateway runs as a container inside the desktop. Easier, weaker isolation ([comparison](docs/THREAT_MODEL.md#two-vms-vs-single-vm)) | An installer ISO for a VM you create in Fusion or UTM |
 
 Installation for both editions: [docs/INSTALL.md](docs/INSTALL.md). Unless noted, this page describes the two-VM edition.
 
@@ -112,7 +112,6 @@ Details: [docs/INSTALL.md](docs/INSTALL.md)
 - Apple Silicon with VMware Fusion or UTM only; there is no x86 build
 - Only the latest release is supported; earlier releases get no fixes and their images are not kept
 - Tor Browser comes from the stable channel for linux-aarch64, a newer and less widely used platform than Tor Browser's x86 builds
-- The single VM edition is tested on VMware Fusion only; under UTM it is untested
 - No Tor bridges or pluggable transports: your network can see that you use Tor, and Ombra does not work where Tor is blocked
 - No independent security audit yet; read the [threat model](docs/THREAT_MODEL.md) before relying on it
 - Report vulnerabilities through [SECURITY.md](SECURITY.md)

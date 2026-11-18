@@ -130,9 +130,8 @@ What differs from Fusion:
 
 ## Single VM (installer ISO)
 
-One VM that you create yourself, installed from Ombra's ISO. Tested on
-VMware Fusion. UTM has not been tested for this edition: the UTM steps
-below are untested.
+One VM that you create yourself in VMware Fusion or UTM, installed from
+Ombra's ISO.
 
 | Item | Detail |
 |---|---|
@@ -165,7 +164,7 @@ UTM's clipboard agent (`spice-vdagent`) non-executable. It cannot change
 the VM settings, and it cannot turn off VMware Tools' host time
 synchronisation from inside the guest.
 
-### Steps: VMware Fusion (tested)
+### Steps: VMware Fusion
 
 1. Download the ISO and `SHA256SUMS.txt` into one folder and verify them
    (Item table above).
@@ -185,7 +184,7 @@ synchronisation from inside the guest.
 8. At the boot menu choose **Persistent**, unlock with your passphrase,
    and log in as `ombra` with your password.
 
-### Steps: UTM (untested for this edition)
+### Steps: UTM
 
 1. Download and verify as for Fusion.
 2. In UTM, create a new virtual machine with **Virtualize** (not
@@ -193,14 +192,16 @@ synchronisation from inside the guest.
 3. Set the values in the VM settings table: 4 CPUs, 6 GB memory, a
    30 GB disk, the network on Shared Network, clipboard sharing and
    shared folders off.
-4. Start the VM and follow steps 4-8 of the Fusion steps.
+4. In the VM's QEMU settings, add the argument
+   `-machine kernel-irqchip=off` (UTM needs it for restarts from inside
+   the guest; the two-VM UTM bundles carry it already).
+5. Start the VM and follow steps 4-8 of the Fusion steps.
 
-UTM points that are known from the two-VM edition and not tested here:
+UTM notes:
 
 | Topic | Detail |
 |---|---|
-| Restart | The two-VM UTM bundles add the QEMU argument `-machine kernel-irqchip=off`, because a restart from inside the guest hung on UTM 5.0.8 without it. A VM you create does not have it. If the restart after the install hangs, stop the VM, add that argument in the VM's QEMU settings, and start it again |
-| Display | The two-VM UTM bundles use the `virtio-gpu-pci` card without GL. In this edition the window-size agent is disabled (it also carries UTM's clipboard), so the display is not expected to follow the UTM window |
+| Display | The two-VM UTM bundles use the `virtio-gpu-pci` card without GL. In this edition the window-size agent is disabled (it also carries UTM's clipboard), so the display keeps its size when the UTM window changes |
 | Clipboard | Leave clipboard sharing off in UTM; inside the guest the agent that carries it does not run |
 
 ### After the install

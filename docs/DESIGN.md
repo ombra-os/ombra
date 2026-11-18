@@ -50,7 +50,7 @@ trade-off is in [THREAT_MODEL.md](THREAT_MODEL.md#two-vms-vs-single-vm).
 | Tor state | Persistent: `/var/lib/ombra/gateway-state/tor` (root-only parent, idmapped into the container). Amnesic: in the container's RAM overlay |
 | Clock | One kernel clock, set by the desktop's `ombra-timesync`; the container's is masked |
 | Disk and account | Created by the installer with the user's passphrase and password: no build passphrase, no first-use screen (`ombra-welcome.service` masked; the setup gate still runs) |
-| Host channels | Guest side only: VMware drag-and-drop, clipboard and HGFS plugins and the `vmhgfs` helpers removed and excluded from reinstall (`/etc/dpkg/dpkg.cfg.d/ombra-no-host-channels`); `/usr/bin/spice-vdagent` held at mode 0644 by a dpkg statoverride, so UTM's clipboard agent does not run and the display does not follow the UTM window (untested) |
+| Host channels | Guest side only: VMware drag-and-drop, clipboard and HGFS plugins and the `vmhgfs` helpers removed and excluded from reinstall (`/etc/dpkg/dpkg.cfg.d/ombra-no-host-channels`); `/usr/bin/spice-vdagent` held at mode 0644 by a dpkg statoverride, so UTM's clipboard agent does not run and the display does not follow the UTM window |
 | Installer | Boots by itself ("Install Ombra (single VM)", 3 s); asks only the account password and the disk passphrase (8 characters minimum); `build/single-iso/early.sh` stops before partitioning on a disk under 24 GB or memory under about 3 GB; picks the first disk that is not the install medium; reboots into the system when done |
 | Edition marker | `/etc/ombra/edition` is `single` (two-VM installs write `two-vm`); the updater's index role is `single` |
 
