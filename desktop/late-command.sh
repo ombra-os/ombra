@@ -521,10 +521,11 @@ phase "apps-begin"
 rm -f /tmp/ombra-apps-fail
 
 # Debian packages, one transaction, recommends off: Kleopatra (OpenPGP), OnionShare (through the gateway's onion-service
-# broker), Electrum (bitcoin); squashfs-tools stays for tooling that unpacks AppImages
+# broker), Electrum (bitcoin: Debian's package brings its icon and libraries, python3-pyqt6 the Qt 6 that the pinned
+# release in /opt/electrum runs on); squashfs-tools stays for tooling that unpacks AppImages
 in-target apt-get install -y -o Acquire::Retries=3 -o APT::Install-Recommends=false \
     -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-unsafe-io \
-    kleopatra pinentry-qt scdaemon onionshare electrum squashfs-tools proxychains4 \
+    kleopatra pinentry-qt scdaemon onionshare electrum python3-pyqt6 squashfs-tools proxychains4 \
     >/dev/null 2>&1 \
     || echo "ombra-apps: the Debian application packages did not install" > /tmp/ombra-apps-fail
 # onionshare-cli depends on the tor package: the desktop must never run a Tor of its own, the gateway is the only Tor
@@ -557,8 +558,11 @@ if verify_staged feather; then
     chmod 0755 /target/var/tmp/feather.AppImage
     in-target sh -c 'cd /var/tmp && ./feather.AppImage --appimage-extract >/dev/null 2>&1 && cp -a squashfs-root/. /opt/feather/ && rm -rf squashfs-root feather.AppImage' \
         || echo "ombra-apps: Feather would not unpack" > /tmp/ombra-apps-fail
+    # the version marker Update Ombra's app updates read (without it a fresh install is offered the version it has)
+    awk -F= '$1=="version"{print $2}' /ombra/vendor/feather.sha256 > /target/opt/feather/.ombra-version 2>/dev/null || true
     in-target chmod -R a+rX /opt/feather 2>/dev/null || true
-    [ -x /target/opt/feather/usr/bin/feather ] || echo "ombra-apps: Feather is not installed" > /tmp/ombra-apps-fail
+    [ -x /target/opt/feather/usr/bin/feather ] && [ -s /target/opt/feather/.ombra-version ] \
+        || echo "ombra-apps: Feather is not installed" > /tmp/ombra-apps-fail
 fi
 
 # SimpleX: upstream .deb (bundles its own Java runtime); apt resolves its library dependencies
@@ -583,6 +587,17 @@ Terminal=false
 Categories=Network;InstantMessaging;
 Keywords=chat;messenger;simplex
 DESK
+fi
+# Electrum: the pinned release from electrum.org, unpacked into /opt/electrum (what Update Ombra's app updates replace);
+# /usr/local/bin/electrum runs it on the system's Python, Qt 6, cryptography and libsecp256k1
+if verify_staged electrum; then
+    cp "$APP_FILE" /target/var/tmp/electrum.tar.gz
+    in-target sh -c 'mkdir -p /opt/electrum && tar -xzf /var/tmp/electrum.tar.gz -C /opt/electrum --strip-components=1 --no-same-owner && rm -f /var/tmp/electrum.tar.gz' \
+        || echo "ombra-apps: Electrum would not unpack" > /tmp/ombra-apps-fail
+    awk -F= '$1=="version"{print $2}' /ombra/vendor/electrum.sha256 > /target/opt/electrum/.ombra-version 2>/dev/null || true
+    in-target chmod -R a+rX /opt/electrum 2>/dev/null || true
+    [ -f /target/opt/electrum/run_electrum ] && [ -s /target/opt/electrum/.ombra-version ] \
+        || echo "ombra-apps: Electrum is not installed" > /tmp/ombra-apps-fail
 fi
 in-target update-desktop-database >/dev/null 2>&1 || true
 

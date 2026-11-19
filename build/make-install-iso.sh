@@ -167,7 +167,7 @@ if [ "$SRCDIR" = desktop ]; then
     stage_pinned torbrowser "$(awk -F= '$1=="file"{print $2}' "$REPO/build/pins/torbrowser.txt")"
     # the expected hash travels INTO the initrd for the in-installer re-verify
     cp "$REPO/build/pins/torbrowser.txt" "$STAGE/initrd/ombra/vendor/torbrowser.sha256"
-    for app in feather simplex; do
+    for app in feather simplex electrum; do
         stage_pinned "$app" "$(awk -F= '$1=="file"{print $2}' "$REPO/build/pins/$app.txt")"
         cp "$REPO/build/pins/$app.txt" "$STAGE/initrd/ombra/vendor/$app.sha256"
     done

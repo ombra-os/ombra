@@ -472,11 +472,11 @@ else
 fi
 # ---- the pinned upstream apps: pinned, staged, re-verified in the installer, unpacked, launched ----
 LC_APPS="$REPO/desktop/late-command.sh"
-for app in feather simplex; do
+for app in feather simplex electrum; do
   PIN="$REPO/build/pins/$app.txt"
   if [ -f "$PIN" ] \
      && awk -F= '$1=="sha256"{ok=length($2)==64} END{exit ok?0:1}' "$PIN" \
-     && grep -q "stage_pinned $app" "$MKI" || grep -q 'for app in feather simplex' "$MKI"; then
+     && grep -q "stage_pinned $app" "$MKI" || grep -q 'for app in feather simplex electrum' "$MKI"; then
     ok "$app is pinned with a sha256 and staged by the ISO build"
   else
     bad "$app pin or staging is missing"
@@ -488,6 +488,12 @@ if grep -q 'verify_staged feather' "$LC_APPS" && grep -q 'verify_staged simplex'
   ok "Feather and SimpleX are hash re-verified in the installer, installed, and a failure parks the install"
 else
   bad "the installer's Feather/SimpleX handling is incomplete"
+fi
+if grep -q 'verify_staged electrum' "$LC_APPS" && grep -q '/var/tmp/electrum.tar.gz' "$LC_APPS" \
+   && grep -q '/target/opt/electrum/.ombra-version' "$LC_APPS" && grep -q '/target/opt/feather/.ombra-version' "$LC_APPS" && grep -q 'onionshare electrum python3-pyqt6' "$LC_APPS"; then
+  ok "Electrum's pinned release is hash re-verified, unpacked into /opt/electrum with its version, and has Qt 6; Feather gets its version marker"
+else
+  bad "the installer's Electrum handling is incomplete"
 fi
 if [ -x "$REPO/desktop/rootfs/usr/local/bin/feather" ] \
    && grep -qx 'Exec=/usr/local/bin/feather' "$REPO/desktop/rootfs/usr/local/share/applications/feather.desktop" \

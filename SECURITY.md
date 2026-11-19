@@ -9,10 +9,11 @@ Only the current release gets fixes.
 
 | Release | Supported |
 |---|---|
-| v1.2.0 (current) | Yes |
-| v1.1.0 | No: update the desktop with Update Ombra and replace the gateway with the v1.2.0 image; its images are not kept |
+| v1.2.1 (current) | Yes |
+| v1.2.0 | No: update the desktop or single VM with Update Ombra; the v1.2.0 gateway needs no change; its images are not kept |
+| v1.1.0 | No: update the desktop with Update Ombra and replace the gateway with the current image; its images are not kept |
 | v1.0.0 | No: no fixes, and its images are not kept |
-| Later releases | The newest tag replaces v1.2.0 here; earlier ones stop being supported |
+| Later releases | The newest tag replaces v1.2.1 here; earlier ones stop being supported |
 
 ## Reporting
 

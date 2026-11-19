@@ -43,8 +43,8 @@ is not needed for it.
 
 ## Quick start (two VMs): the release images
 
-1. Download `ombra-gateway-arm64-v1.2.0.vmwarevm.zip`,
-   `ombra-desktop-arm64-v1.2.0.vmwarevm.zip` and `SHA256SUMS.txt` from the
+1. Download `ombra-gateway-arm64-v1.2.1.vmwarevm.zip`,
+   `ombra-desktop-arm64-v1.2.1.vmwarevm.zip` and `SHA256SUMS.txt` from the
    download page into one folder, and verify what you downloaded:
 
    ```sh
@@ -110,7 +110,7 @@ hypervisor and use its archives; do not mix them.
 | Step | Detail |
 |---|---|
 | Host | Apple Silicon Mac, UTM 5.0.8 or newer (QEMU backend; Ombra does not use the Apple Virtualization backend) |
-| Download | `ombra-gateway-arm64-v1.2.0.utm.zip`, `ombra-desktop-arm64-v1.2.0.utm.zip` and `SHA256SUMS.txt`; verify with `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`. Check the signature too ([Verify the signature](#verify-the-signature)) |
+| Download | `ombra-gateway-arm64-v1.2.1.utm.zip`, `ombra-desktop-arm64-v1.2.1.utm.zip` and `SHA256SUMS.txt`; verify with `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`. Check the signature too ([Verify the signature](#verify-the-signature)) |
 | Unpack | Double-click each zip in Finder, or run `ditto -x -k <zip> .` in a terminal |
 | Import | Double-click each `.utm` to add it to UTM. Nothing needs changing in the VM settings |
 | Start | Gateway first: pick a boot mode, wait for its connectivity panel. Then the desktop: pick **Persistent** for the first boot. First boot is identical to Fusion (see below) |
@@ -423,11 +423,12 @@ bash build/fusion/create-desktop-vm.sh --verify --fix "$HOME/Virtual Machines.lo
   new image.
 - Only the latest release is supported; earlier releases get no fixes.
 - v1.0 installs have no updater and need a fresh download of both machines.
-- From v1.1.0: the desktop updates to v1.2.0 in place with **Update
-  Ombra**; your files stay where they are. The gateway holds no user
-  data, so replace it with the v1.2.0 gateway image (download, unzip,
-  open, start): a fresh gateway is the recommended setup. A v1.2.0
-  desktop also works with a v1.1.0 gateway in the meantime.
+- From v1.1.0 or v1.2.0: the desktop updates to v1.2.1 in place with
+  **Update Ombra**; your files stay where they are. A v1.1.0 gateway
+  holds no user data, so replace it with the current gateway image
+  (download, unzip, open, start): a fresh gateway is the recommended
+  setup. An updated desktop also works with a v1.1.0 gateway in the
+  meantime. A v1.2.0 gateway needs nothing.
 - The gateway's Amnesic mode starts every boot from the installed system,
   so it never carries an update itself: apply updates in Persistent mode.
 
