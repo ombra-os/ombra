@@ -429,6 +429,8 @@ impl Fb {
         let (red, green, blue) = (u32_at(&var, 32), u32_at(&var, 44), u32_at(&var, 56));
         let (rl, gl, bl) = (u32_at(&var, 36), u32_at(&var, 48), u32_at(&var, 60));
         let stride = u32_at(&fix, 48) as usize;
+        // fb_fix_screeninfo.smem_len on 64-bit: the bytes the driver really has
+        let smem_len = u32_at(&fix, 24) as usize;
         // rows are written as u32 slices, so every row start must stay 4-byte aligned
         if !ok
             || bpp != 32
@@ -437,6 +439,11 @@ impl Fb {
             || h == 0
             || stride < w * 4
             || !stride.is_multiple_of(4)
+            // a colour offset past 24 would shift out of the pixel; a mapping longer than the driver's memory would fault
+            || red > 24
+            || green > 24
+            || blue > 24
+            || stride.saturating_mul(h) > smem_len
         {
             // SAFETY: fd came from into_raw_fd above.
             unsafe { libc::close(fd) };

@@ -48,7 +48,6 @@ case "$NAME" in
     check "ethernet1 is hostonly" '[ "$(vmx_get ethernet1.connectionType)" = "hostonly" ]' ;;
   *desktop*)
     check "ethernet0 is hostonly" '[ "$(vmx_get ethernet0.connectionType)" = "hostonly" ]' ;;
-  # the single edition ships only as its installer ISO, never as a VM bundle
   *) check "archive name contains gateway or desktop" 'false' ;;
 esac
 upper() { tr '[:lower:]' '[:upper:]'; }

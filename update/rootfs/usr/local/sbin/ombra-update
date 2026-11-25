@@ -36,8 +36,6 @@ BOOTID=/proc/sys/kernel/random/boot_id
 PROCSTAT=/proc/stat
 REBOOT_FLAG=/run/reboot-required
 BOOTDIR=/boot
-GWIMG=/var/lib/ombra/gateway.img
-GWSUM=/usr/share/ombra/gateway.img.sha256
 SAFE_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 SNAP=root-pre
 VG=vg0
@@ -48,19 +46,21 @@ BASE_URL=""
 [ -r "$CONF" ] && . "$CONF"
 ROLE=$(cat /etc/ombra/role 2>/dev/null || echo unknown)
 CURRENT=$(cat /etc/ombra/version 2>/dev/null || echo 0)
-# the single edition runs the gateway as a container inside the desktop: role stays desktop, bundles are its own
+# Ombra has one edition (two VMs). A machine installed from the discontinued single VM ISO (1.2.0, 1.2.1) is marked
+# `single`: it must never take a two-VM bundle, so it is refused here, in every mode
 EDITION=$( { tr -d '[:space:]' < /etc/ombra/edition; } 2>/dev/null ); EDITION=${EDITION:-two-vm}
 case "$ROLE" in
     desktop) SOCKS=10.55.10.1:9050 ;;
     gateway) SOCKS=127.0.0.1:9050 ;;
     *) echo "ombra-update: unknown role" >&2; exit 2 ;;
 esac
-# UROLE names this machine in the index and in bundle manifests; everything else keys on ROLE
-case "$EDITION:$ROLE" in
-    two-vm:*) UROLE=$ROLE ;;
-    single:desktop) UROLE=single ;;
+case "$EDITION" in
+    two-vm) ;;
+    single) echo "ombra-update: the single VM edition is discontinued and receives no updates" >&2; exit 2 ;;
     *) echo "ombra-update: unknown edition" >&2; exit 2 ;;
 esac
+# the name of this machine in the index and in bundle manifests
+UROLE=$ROLE
 # apt through Tor; set with -o so it overrides apt.conf.d and nothing persistent is added to /etc/apt.
 # Signature checks are apt's defaults and are never relaxed here
 APT_OPTS="-o Acquire::http::Proxy=socks5h://$SOCKS -o Acquire::https::Proxy=socks5h://$SOCKS -o Acquire::Retries=3 -o Acquire::http::Timeout=60 -o Acquire::https::Timeout=60 -o Acquire::Languages=none -o Dpkg::Use-Pty=0"
@@ -269,10 +269,6 @@ fail_applied() {
     die_code 4 "the update failed AND could not be rolled back: the system may be half-updated. Back up your files, run 'ombra-update rollback' again, and if that fails reinstall from a fresh image"
 }
 
-gw_image_ok() { # single edition: the container's image must match the checksum shipped next to it
-    want=$(awk '{print $1; exit}' "$GWSUM" 2>/dev/null)
-    valid_value "${want:-}" && [ -f "$GWIMG" ] && [ "$(sha "$GWIMG")" = "$want" ]
-}
 
 cmd_apply() {
     need_root apply
@@ -314,8 +310,6 @@ cmd_apply() {
     tar -tzf "$B/payload.tar.gz" > "$B/list" 2>/dev/null || die "bundle is malformed"
     # reject absolute paths and traversal before anything touches the system
     awk '/^\// || /(^|\/)\.\.(\/|$)/ { bad=1 } END { exit bad }' "$B/list" || die "payload contains unsafe paths"
-    gwimg=""
-    [ "$EDITION" = single ] && sed 's#^\./##' "$B/list" | grep -qxE 'var/lib/ombra/gateway\.img|usr/share/ombra/gateway\.img\.sha256' && gwimg=1
 
     if [ "$ROLE" = desktop ]; then
         snap_create
@@ -336,10 +330,6 @@ cmd_apply() {
         fi
     fi
 
-    # single edition: the install makes the gateway image and its hash immutable; lift it for the replace
-
-    [ -z "${gwimg:-}" ] || chattr -i "$GWIMG" "$GWSUM" 2>/dev/null || true
-
     begin_change
     if ! tar -xzf "$B/payload.tar.gz" -C / --no-same-owner --keep-directory-symlink --no-overwrite-dir --warning=no-unknown-keyword 2>/dev/null; then
         fail_applied "applying the payload failed"
@@ -348,18 +338,11 @@ cmd_apply() {
         /usr/local/lib/ombra-update/post.sh "$CURRENT" "$ver" || fail_applied "post step failed"
         rm -f /usr/local/lib/ombra-update/post.sh
     fi
-    # the gateway container is not restarted here (the network would drop mid-update): the restart picks the image up
-    if [ -n "$gwimg" ]; then
-        gw_image_ok || fail_applied "the gateway image does not match its checksum"
-        # defence in depth only: the hash check at every container start is what refuses a changed image
-        chattr +i "$GWIMG" "$GWSUM" 2>/dev/null || say "note: the new gateway image could not be marked immutable"
-    fi
     set_version "$ver"
     rm -f "$STATE/applying"
     rm -rf "$B"
     sync
     write_state "applied" "$ver"
-    [ -z "$gwimg" ] || say "The gateway image was replaced; the new one is used after the restart."
     say "Updated to $ver. Restart to finish. A rollback stays available for ten minutes after the next boot."
 }
 

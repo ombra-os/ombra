@@ -32,6 +32,10 @@ IPAddressDeny=any
 IPAddressAllow=127.0.0.1 10.55.10.0/24
 ProtectProc=invisible
 PrivateDevices=yes
+# 16 sessions of two threads and a bounded queue each: these are backstops
+MemoryMax=64M
+TasksMax=64
+LimitCORE=0
 
 [Install]
 WantedBy=multi-user.target

@@ -75,7 +75,7 @@ pub fn scan(dir: &Path) -> Result<Vec<AskRequest>> {
     for entry in entries {
         let Ok(entry) = entry else { continue };
         let path = entry.path();
-        if path.extension().map(|e| e == "ask").unwrap_or(false) {
+        if is_request_name(&path) && is_own_regular_file(&path) {
             if let Ok(text) = fs::read_to_string(&path) {
                 if let Some(req) = parse_ask(&text, &path) {
                     out.push(req);
@@ -87,10 +87,32 @@ pub fn scan(dir: &Path) -> Result<Vec<AskRequest>> {
     Ok(out)
 }
 
+/// systemd names a request `ask.XXXXXX`; `*.ask` is accepted as well.
+fn is_request_name(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    name.starts_with("ask.") || path.extension().is_some_and(|e| e == "ask")
+}
+
+/// A request is a regular file (never a link) that belongs to the user this agent runs as: root, in service.
+fn is_own_regular_file(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let me = unsafe { libc::geteuid() };
+    fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file() && m.uid() == me)
+}
+
+/// The passphrase goes to a unix socket that belongs to this agent's user, and to nothing else: not through a link,
+/// not into a file or a fifo someone put where the request points.
 pub fn write_answer(socket: &Path, password: &[u8]) -> Result<()> {
-    let meta =
-        fs::metadata(socket).with_context(|| format!("answer channel {}", socket.display()))?;
-    let to_socket = meta.file_type().is_socket();
+    use std::os::unix::fs::MetadataExt as _;
+    let meta = fs::symlink_metadata(socket)
+        .with_context(|| format!("answer channel {}", socket.display()))?;
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let me = unsafe { libc::geteuid() };
+    if !meta.file_type().is_socket() || meta.uid() != me {
+        anyhow::bail!("answer channel {} is not a socket of this user", socket.display());
+    }
+    let to_socket = true;
     let mut frame = packet_for_channel(to_socket, password);
     let sent = write_channel_bounded(socket, to_socket, &frame);
     // frame holds the passphrase; scrub it
@@ -145,7 +167,6 @@ fn write_channel_bounded(path: &Path, to_socket: bool, frame: &[u8]) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
 
     fn tempdir(tag: &str) -> PathBuf {
         let d =
@@ -251,42 +272,41 @@ PID=412
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// Legacy fifo channel keeps the line protocol (password + '\n').
+    /// The passphrase goes to a socket of this user only: a fifo, a plain file or a link at the request's path gets nothing.
     #[test]
-    fn answer_reaches_a_fifo_reader_exactly_one_line() {
-        let dir = tempdir("fifo");
+    fn answer_is_refused_for_anything_but_a_socket() {
+        let dir = tempdir("notsocket");
         let fifo = dir.join("sck.1");
-        assert!(std::process::Command::new("mkfifo")
-            .arg(&fifo)
-            .status()
-            .expect("mkfifo")
-            .success());
-
-        let rpath = fifo.clone();
-        let reader = std::thread::spawn(move || {
-            let mut f = fs::File::open(&rpath).unwrap();
-            let mut got = String::new();
-            f.read_to_string(&mut got).unwrap();
-            got
-        });
-        // let the reader open its end first
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        write_answer(&fifo, b"my-secret").unwrap();
-        assert_eq!(reader.join().unwrap(), "my-secret\n");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().expect("mkfifo").success());
+        assert!(write_answer(&fifo, b"my-secret").is_err());
+        let file = dir.join("sck.2");
+        fs::write(&file, "").unwrap();
+        assert!(write_answer(&file, b"my-secret").is_err());
+        assert_eq!(fs::read_to_string(&file).unwrap(), "", "nothing was written into the file");
+        // a link to a real socket is refused too
+        let real = dir.join("real.sock");
+        let _listener = UnixDatagram::bind(&real).unwrap();
+        let link = dir.join("sck.3");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert!(write_answer(&link, b"my-secret").is_err());
+        // the socket itself is answered
+        write_answer(&real, b"my-secret").unwrap();
+        let mut buf = [0u8; 64];
+        let n = _listener.recv(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"+my-secret\0");
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn fifo_with_no_listener_times_out_instead_of_hanging() {
-        let dir = tempdir("nolistener");
-        let fifo = dir.join("sck.2");
-        assert!(std::process::Command::new("mkfifo")
-            .arg(&fifo)
-            .status()
-            .unwrap()
-            .success());
-        let res = write_answer(&fifo, b"nobody-there");
-        assert!(res.is_err(), "expected a timeout error, got {res:?}");
+    fn scan_takes_systemds_real_request_names_and_skips_links() {
+        let dir = tempdir("names");
+        fs::write(dir.join("ask.AbCdEf"), "Socket=/run/sck.real\n").unwrap();
+        fs::write(dir.join("tmp.AbCdEf"), "Socket=/run/sck.tmp\n").unwrap();
+        fs::write(dir.join("elsewhere"), "Socket=/run/sck.link\n").unwrap();
+        std::os::unix::fs::symlink(dir.join("elsewhere"), dir.join("ask.LINKED")).unwrap();
+        let reqs = scan(&dir).unwrap();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].socket, PathBuf::from("/run/sck.real"));
         let _ = fs::remove_dir_all(&dir);
     }
 

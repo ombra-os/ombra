@@ -2,7 +2,7 @@
 # Guided build of Ombra from source on an Apple Silicon Mac with VMware Fusion.
 #
 #   curl -fsSL https://ombra-os.org/build.sh | bash
-#   bash scripts/build.sh [--dir PATH] [--yes] [--isos-only] [--edition two-vm|single]
+#   bash scripts/build.sh [--dir PATH] [--yes] [--isos-only]
 #
 # Environment: OMBRA_REPO_URL overrides the clone source.
 
@@ -16,7 +16,6 @@ NEED_GB=50
 DIR=""
 ASSUME_YES=0
 ISOS_ONLY=0
-EDITION=two-vm
 
 if [ -t 1 ]; then
   B=$'\033[1m'; D=$'\033[2m'; G=$'\033[32m'; R=$'\033[31m'; Y=$'\033[33m'; X=$'\033[0m'
@@ -41,12 +40,10 @@ ask() {
 }
 
 usage() {
-  say "usage: build.sh [--dir PATH] [--yes] [--isos-only] [--edition two-vm|single]"
+  say "usage: build.sh [--dir PATH] [--yes] [--isos-only]"
   say "  --dir PATH    where to clone and build (default: ~/ombra)"
   say "  --yes         answer yes to every prompt"
   say "  --isos-only   stop after building the installer ISOs"
-  say "  --edition E   two-vm (default: a gateway VM and a desktop VM) or single (one installer ISO: you boot it in"
-  say "                your own VM and choose the disk passphrase and password there; no VM is created)"
 }
 
 parse_args() {
@@ -55,10 +52,6 @@ parse_args() {
       --dir) [ "$#" -ge 2 ] || die "--dir needs a path"; DIR="$2"; shift 2 ;;
       --yes|-y) ASSUME_YES=1; shift ;;
       --isos-only) ISOS_ONLY=1; shift ;;
-      --edition)
-        [ "$#" -ge 2 ] || die "--edition needs two-vm or single"
-        case "$2" in two-vm|single) EDITION="$2" ;; *) die "--edition must be two-vm or single" ;; esac
-        shift 2 ;;
       -h|--help) usage; exit 0 ;;
       *) usage; die "unknown option: $1" ;;
     esac
@@ -71,7 +64,7 @@ check_host() {
   [ "$(uname -m)" = arm64 ] || die "Apple Silicon is required (this Mac reports $(uname -m))"
   [ "$(id -u)" != 0 ] || die "do not run as root"
   ok "Apple Silicon Mac"
-  if [ "$ISOS_ONLY" = 0 ] && [ "$EDITION" != single ]; then
+  if [ "$ISOS_ONLY" = 0 ]; then
     [ -x "$VMRUN" ] || die "VMware Fusion not found; install it from vmware.com, then run this again"
     ok "VMware Fusion"
   fi
@@ -177,6 +170,7 @@ fetch_pins() {
     ok "Debian installer verified"
   fi
   fetch_pinned torbrowser "Tor Browser"
+  fetch_pinned electrum "Electrum"
   fetch_pinned feather "Feather"
   fetch_pinned simplex "SimpleX"
 }
@@ -185,14 +179,9 @@ build_isos() {
   step "Building the binaries and installer ISOs"
   run "the Rust build" bash -c 'cd core && bash build.sh'
   cp core/dist/aarch64/ombra-askpass core/dist/aarch64/ombra-welcome desktop/rootfs/usr/local/libexec/ombra/
-  cp core/dist/aarch64/ombra core/dist/aarch64/ombra-statusd desktop/rootfs/usr/local/bin/
+  cp core/dist/aarch64/ombra core/dist/aarch64/ombra-statusd core/dist/aarch64/ombra-tproxy desktop/rootfs/usr/local/bin/
   cp core/dist/aarch64/ombra core/dist/aarch64/ombra-torctl-filter gateway/rootfs/usr/local/bin/
   ok "binaries built"
-  if [ "$EDITION" = single ]; then
-    run "the single-edition ISO" bash build/make-install-iso.sh single
-    ok "build/disks/ombra-install-single.iso"
-    return 0
-  fi
   run "the gateway ISO" bash build/make-install-iso.sh gateway
   run "the desktop ISO" bash build/make-install-iso.sh desktop
   ok "build/disks/ombra-install-gateway.iso"
@@ -240,17 +229,6 @@ build_vms() {
   ok "desktop started"
 }
 
-# the single edition is an installer ISO only: the user creates the VM and installs it themselves
-finish_single() {
-  step "Done"
-  say "  The installer ISO is ${B}$DIR/build/disks/ombra-install-single.iso${X}"
-  say "  1. Create a VM in VMware Fusion or UTM: Linux, 64-bit ARM; 4 CPUs, 6 GB memory, a 30 GB disk, one NAT network adapter"
-  say "  2. Boot it from the ISO; the installer starts by itself"
-  say "  3. Choose the disk passphrase (8 characters or more) and the account password; it then installs and restarts"
-  say ""
-  say "  ${D}The ISO's README.txt says the same; details: docs/INSTALL.md${X}"
-}
-
 finish() {
   step "Done"
   say "  1. In the desktop window, choose ${B}Persistent${X} at the boot menu"
@@ -263,28 +241,16 @@ finish() {
 
 main() {
   parse_args "$@"
-  if [ "$EDITION" = single ]; then
-    say "${B}Ombra${X} builds the single-edition installer ISO: you install it into a VM you create (VMware Fusion or UTM)."
-    say "It downloads the pinned Debian installer, Tor Browser, Feather and SimpleX (each checked against its"
-    say "pinned hash) and builds the ISO locally. Nothing is installed and no VM is created."
-  else
-    say "${B}Ombra${X} builds two virtual machines on this Mac: a Tor gateway and a desktop."
-  fi
-  if [ "$EDITION" != single ]; then
-    say "It downloads the pinned Debian installer, Tor Browser, Feather and SimpleX (each checked against its"
-    say "pinned hash), builds locally, and creates the VMs in VMware Fusion. The installers fetch Debian"
-    say "packages over this Mac's normal connection."
-  fi
+  say "${B}Ombra${X} builds two virtual machines on this Mac: a Tor gateway and a desktop."
+  say "It downloads the pinned Debian installer, Tor Browser, Feather and SimpleX (each checked against its"
+  say "pinned hash), builds locally, and creates the VMs in VMware Fusion. The installers fetch Debian"
+  say "packages over this Mac's normal connection."
   ask "Continue?" || { say "Nothing was changed."; exit 0; }
   check_host
   ensure_tools
   get_source
   fetch_pins
   build_isos
-  if [ "$EDITION" = single ]; then
-    finish_single
-    exit 0
-  fi
   if [ "$ISOS_ONLY" = 1 ]; then
     step "Done"
     say "  ISOs are in $DIR/build/disks"

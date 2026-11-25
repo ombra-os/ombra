@@ -9,11 +9,10 @@ Only the current release gets fixes.
 
 | Release | Supported |
 |---|---|
-| v1.2.1 (current) | Yes |
-| v1.2.0 | No: update the desktop or single VM with Update Ombra; the v1.2.0 gateway needs no change; its images are not kept |
-| v1.1.0 | No: update the desktop with Update Ombra and replace the gateway with the current image; its images are not kept |
-| v1.0.0 | No: no fixes, and its images are not kept |
-| Later releases | The newest tag replaces v1.2.1 here; earlier ones stop being supported |
+| v1.2.2 (current) | Yes |
+| v1.2.0, v1.2.1 | No: both machines update in place to v1.2.2 (desktop: Update Ombra; gateway: `sudo ombra-update apply`) |
+| Earlier releases | No |
+| Later releases | The newest tag replaces v1.2.2 here; earlier ones stop being supported |
 
 ## Reporting
 
@@ -25,7 +24,7 @@ Include:
 | Item | Detail |
 |---|---|
 | Version | Release tag or commit |
-| Component | Gateway VM, desktop VM, single VM edition (gateway container), installer, updater, build tooling or `core/` binaries |
+| Component | Gateway VM, desktop VM, installer, updater, build tooling or `core/` binaries |
 | Impact | What an attacker gains, and the preconditions |
 | Reproduction | Steps or a proof of concept |
 | Leak evidence | What leaves the guest and where it goes, identifying details redacted |
@@ -44,8 +43,6 @@ Include:
 |---|---|
 | Compromised macOS host | Defeats the guests entirely; documented and by design |
 | Public build passphrase (`ombra-disk`) on a fresh image | Published by design; it only opens a machine that has not been set up. A copy of an image taken before first boot opens with it and the original volume key. Failures of the first-use flow that replaces them are in scope |
-| Accounts | Born locked (`*`) on both machines; no public login credential exists. First use sets the desktop user's password. Single VM edition: the installer sets it; root stays locked |
+| Accounts | Born locked (`*`) on both machines; no public login credential exists. First use sets the desktop user's password; root stays locked |
 | Unlimited unlock attempts at the console | Each guess costs argon2id time; accepted under the physical-attacker model |
-| Fixed argon2id parameters (1 GiB, 4 iterations, 2 threads), two-VM edition | Not benchmarked, so first-use setup stays bounded in a VM. The single VM edition uses cryptsetup's benchmarked parameters |
-| Single VM edition: root on the desktop bypasses Tor, or a kernel exploit reaches the gateway container | Documented trade-off of sharing one kernel ([threat model](docs/THREAT_MODEL.md#two-vms-vs-single-vm)). A way for an unprivileged user or a desktop app to get past the container boundary is in scope |
-| Single VM edition: host settings | The user creates the VM; its clipboard, shared-folder, snapshot and time-sync settings are the user's. The guest-side removals are in scope |
+| Fixed argon2id parameters (1 GiB, 4 iterations, 2 threads) | Fixed so that first-use setup takes a bounded time in a VM |

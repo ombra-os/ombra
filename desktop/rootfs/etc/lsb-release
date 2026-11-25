@@ -1,5 +1,5 @@
 # LSB compat (lsb_release reads this file first): RELEASE mirrors VERSION_ID and is never a human surface.
 DISTRIB_ID="Ombra"
-DISTRIB_RELEASE="1.2.1"
+DISTRIB_RELEASE="1.2.2"
 DISTRIB_CODENAME=trixie
 DISTRIB_DESCRIPTION="Ombra"

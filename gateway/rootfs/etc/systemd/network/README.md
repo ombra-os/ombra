@@ -20,17 +20,9 @@ before the distribution's `99-default.link`, so their names win.
 
 ## Format constraint
 
-Keep the `.link` and `.network` files minimal. On Debian trixie
-(systemd 257) under VMware Fusion, versions of these files carrying `#`
-comment blocks, some with multi-byte UTF-8 such as em-dashes, made
+Keep the `.link` and `.network` files minimal: directives only, no `#`
+comment blocks, ASCII only. On Debian trixie (systemd 257) under VMware
+Fusion, these files with comment blocks containing multi-byte UTF-8 make
 `systemd-udevd` fail at boot with "could not create link config file ...
-Invalid argument". The NICs were then never renamed and
-`systemd-networkd` failed with them.
-
-- The same directives without comments parsed and applied cleanly.
-- Warm udevd restarts sometimes parsed the commented files, but cold-boot
-  coldplug failed reliably.
-- The specific bytes that break the parse were not isolated.
-
-Do not add comment blocks or non-ASCII characters here without a
-cold-boot test on a fresh install.
+Invalid argument"; the NICs are then not renamed and `systemd-networkd`
+fails with them.

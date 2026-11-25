@@ -20,7 +20,7 @@ command -v qemu-img >/dev/null || { echo "FAIL: qemu-img missing (brew install q
 # make_bundle <dir> <target>: a bundle shaped exactly like build/utm/export-bundle.sh writes
 make_bundle() {
   local dir="$1" target="$2" size
-  case "$target" in gateway) size=5G ;; desktop|single) size=30G ;; esac
+  case "$target" in gateway) size=5G ;; desktop) size=30G ;; esac
   mkdir -p "$dir/ombra-$target.utm/Data"
   qemu-img create -q -f qcow2 "$dir/ombra-$target.utm/Data/ombra-$target.qcow2" "$size"
   printf 'blank' > "$dir/ombra-$target.utm/Data/efi_vars.fd"
@@ -31,7 +31,6 @@ link = {"Mode": "Host", "VlanGuestAddress": "10.55.20.0/24", "VlanDhcpStartAddre
 def nic(hw, mac, extra):
     d = {"Hardware": hw, "IsolateFromHost": False, "MacAddress": mac, "PortForward": []}; d.update(extra); return d
 network = [nic("vmxnet3", "32:3F:C2:78:FA:A3", {"Mode": "Shared"}), nic("e1000e", "46:45:44:86:17:45", dict(link))] if target == "gateway" \
-    else [nic("vmxnet3", "5A:1C:0E:44:29:B7", {"Mode": "Shared"})] if target == "single" \
     else [nic("vmxnet3", "76:AF:D3:D2:79:4B", dict(link))]
 cfg = {
     "Backend": "QEMU", "ConfigurationVersion": 4,
@@ -68,19 +67,6 @@ echo "== correct bundles pass =="
 for t in gateway desktop; do
   make_bundle "$TMP/good-$t" "$t"
   expect_pass "a correct $t bundle passes" "$t" "$TMP/good-$t"
-done
-
-echo "== the single edition ships only as its installer ISO: no bundle of it is accepted =="
-make_bundle "$TMP/single" single
-if bash "$VERIFY" single "$TMP/single/ombra-single.utm" --allow-test >"$TMP/out.txt" 2>&1; then
-  bad "the verifier accepted a single-edition bundle"
-else
-  grep -q 'usage: verify-bundle.sh <desktop|gateway>' "$TMP/out.txt" && ok "the verifier refuses the single target with its usage line" || bad "the verifier refused single, but not with its usage line"
-fi
-for e in "$REPO/build/utm/export-bundle.sh" "$REPO/build/fusion/export-bundle.sh"; do
-  if bash "$e" single >"$TMP/out.txt" 2>&1; then bad "$(basename "$(dirname "$e")") exporter accepted single"
-  elif [ "$?" = 2 ] && grep -q 'usage: bash build/.*/export-bundle.sh <desktop|gateway>' "$TMP/out.txt"; then ok "$(basename "$(dirname "$e")") exporter refuses single with its usage (exit 2)"
-  else bad "$(basename "$(dirname "$e")") exporter refused single, but not with its usage and exit 2"; fi
 done
 
 echo "== every opened channel or changed device is refused =="

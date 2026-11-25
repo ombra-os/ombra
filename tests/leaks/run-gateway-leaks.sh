@@ -88,9 +88,9 @@ gop runProgramInGuest "$VMX" /bin/rm -f "$GUEST_REPORT" >/dev/null 2>&1 || true
 echo
 [ -n "$FAILN" ] || die "the report has no SUMMARY line — the probe did not finish (vmrun exit $RC)"
 if [ "$FAILN" -gt 0 ]; then
-    echo "==== RESULT: FAIL ($FAILN/7) — see the FAIL lines above; do NOT weaken a failing test, report it ===="
+    echo "==== RESULT: FAIL ($FAILN/9) — see the FAIL lines above; do NOT weaken a failing test, report it ===="
     exit "$FAILN"
 fi
 [ "$RC" -eq 0 ] || die "the report says fail=0 but vmrun exited $RC — result inconsistent, not a pass"
-echo "==== RESULT: PASS (7/7) — no leaks detected ===="
+echo "==== RESULT: PASS (9/9) — no leaks detected ===="
 exit 0

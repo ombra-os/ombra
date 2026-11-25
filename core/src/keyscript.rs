@@ -15,10 +15,16 @@ use crate::theme;
 pub const SPLASH: Duration = Duration::from_millis(1500);
 pub const RETRY_MESSAGE: &str = "that passphrase didn't decrypt - try again";
 pub const TOO_SHORT_MESSAGE: &str = "use at least 8 characters";
+/// Enter on an empty unlock field (entering a passphrase has no length rule; choosing one does).
+pub const EMPTY_MESSAGE: &str = "type your passphrase, then press enter";
 pub const MARKER_PREFIX: &str = "askpass-attempts";
 
 pub fn marker_path(name: Option<&str>) -> PathBuf {
-    PathBuf::from("/run/ombra").join(format!("{MARKER_PREFIX}-{}", name.unwrap_or("unknown")))
+    // the name comes from the environment: only a plain mapping name may become part of a path root writes to
+    let name = name
+        .filter(|n| !n.is_empty() && n.len() <= 64 && n.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.')) && !n.starts_with('.'))
+        .unwrap_or("unknown");
+    PathBuf::from("/run/ombra").join(format!("{MARKER_PREFIX}-{name}"))
 }
 
 pub fn read_attempts(marker: &Path) -> u32 {
@@ -33,7 +39,7 @@ pub fn bump_attempts(marker: &Path) -> io::Result<u32> {
     if let Some(parent) = marker.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(marker, format!("{}\n", prev + 1))?;
+    fs::write(marker, format!("{}\n", prev.saturating_add(1)))?;
     Ok(prev)
 }
 
@@ -190,7 +196,7 @@ pub fn run(
 ) -> io::Result<()> {
     // an unwritable counter must never re-offer the build key: fall to the prompt
     let mut attempt = match bump_attempts(marker) {
-        Ok(prev) => prev + 1,
+        Ok(prev) => prev.saturating_add(1),
         Err(_) => read_attempts(marker).saturating_add(2).max(2),
     };
 
@@ -217,7 +223,7 @@ pub fn run(
 
     // 3+: the last try failed
     let retry_hint = attempt >= 3;
-    let mut field = SecretField::new("passphrase");
+    let mut field = SecretField::for_unlock("passphrase");
     let mut feedback: Option<&'static str> = None;
     loop {
         let message = feedback.map(|m| (m, Severity::Bad)).or({
@@ -239,7 +245,7 @@ pub fn run(
                     sent?;
                     return Ok(());
                 }
-                FieldEvent::TooShort => feedback = Some(TOO_SHORT_MESSAGE),
+                FieldEvent::TooShort => feedback = Some(EMPTY_MESSAGE),
                 FieldEvent::Edited => feedback = None,
                 FieldEvent::Ignored => {}
             }
@@ -409,19 +415,43 @@ mod tests {
     }
 
     #[test]
+    fn a_short_passphrase_can_unlock() {
+        // the 8-character rule is for choosing a passphrase; a disk keyed with a shorter one must still open
+        let dir = tempdir("short");
+        let marker = dir.join("askpass-attempts-x");
+        fs::write(&marker, "2\n").unwrap();
+        let mut out: Vec<u8> = Vec::new();
+        let mut ui = FakeUi::scripted(FakeUi::typed("abc"));
+        keyscript_run_for_test(&marker, &mut out, &mut ui, Duration::ZERO).unwrap();
+        assert_eq!(out, b"abc");
+    }
+
+    #[test]
+    fn the_marker_name_cannot_leave_its_directory() {
+        assert_eq!(marker_path(Some("cryptroot")), PathBuf::from("/run/ombra/askpass-attempts-cryptroot"));
+        assert_eq!(marker_path(Some("nvme0n1p3_crypt")), PathBuf::from("/run/ombra/askpass-attempts-nvme0n1p3_crypt"));
+        for bad in ["../../etc/x", "a/b", "", "..", ".hidden", "a b", "x\n"] {
+            assert_eq!(marker_path(Some(bad)), PathBuf::from("/run/ombra/askpass-attempts-unknown"), "{bad:?}");
+        }
+        let dir = tempdir("sat");
+        let m = dir.join("m");
+        fs::write(&m, "4294967295\n").unwrap();
+        assert_eq!(bump_attempts(&m).unwrap(), u32::MAX);
+        assert_eq!(read_attempts(&m), u32::MAX);
+    }
+
+    #[test]
     fn field_feedback_wins_over_the_retry_line() {
         let dir = tempdir("feedback");
         let marker = dir.join("askpass-attempts-x");
         fs::write(&marker, "2\n").unwrap();
 
         let mut out: Vec<u8> = Vec::new();
-        let mut ui = FakeUi::scripted(FakeUi::typed("abc"));
+        // Enter on an empty field: the field's own message, and nothing is sent
+        let mut ui = FakeUi::scripted(FakeUi::typed(""));
         let res = keyscript_run_for_test(&marker, &mut out, &mut ui, Duration::ZERO);
         assert!(res.is_err());
-        assert_eq!(
-            ui.last_message,
-            Some("use at least 8 characters".to_string())
-        );
+        assert_eq!(ui.last_message, Some(EMPTY_MESSAGE.to_string()));
         assert_eq!(out, b"");
     }
 

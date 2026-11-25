@@ -3,7 +3,6 @@
 # verify-bundle.sh — assert the shape of an Ombra UTM bundle (a .utm directory or an ombra-*.utm.zip):
 # the hardware the guest code relies on, every host-guest channel off, and a disk that is intact.
 # Usage: verify-bundle.sh <desktop|gateway> <bundle.utm | archive.utm.zip> [--allow-test]
-# The single edition ships only as its installer ISO, never as a bundle.
 
 set -euo pipefail
 

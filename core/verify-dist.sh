@@ -53,6 +53,8 @@ check ombra-torctl-filter "$CORE/dist/aarch64/ombra-torctl-filter" \
     "$REPO/gateway/rootfs/usr/local/bin/ombra-torctl-filter"
 check ombra-statusd "$CORE/dist/aarch64/ombra-statusd" \
     "$REPO/desktop/rootfs/usr/local/bin/ombra-statusd"
+check ombra-tproxy "$CORE/dist/aarch64/ombra-tproxy" \
+    "$REPO/desktop/rootfs/usr/local/bin/ombra-tproxy"
 check ombra-askpass "$CORE/dist/aarch64/ombra-askpass" \
     "$REPO/desktop/rootfs/usr/local/libexec/ombra/ombra-askpass"
 check ombra-welcome "$CORE/dist/aarch64/ombra-welcome" \

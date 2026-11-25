@@ -21,7 +21,7 @@ and no general sudo, so the probe travels inside the image and the host
 drives it through its one narrow NOPASSWD sudoers grant. The orchestrator
 asserts the VM is in `vmrun list`, runs the probe, copies the report
 (`/run/ombra-leak/report.txt`, mode 0644 in a root-owned 0755 directory) back to the host and prints it, and exits the
-report's `SUMMARY: ... fail=N` count (0 = 7/7, else the failing count).
+report's `SUMMARY: ... fail=N` count (0 = 9/9, else the failing count).
 Nothing is downloaded and nothing is copied in.
 
 | Runner outcome | Exit |
@@ -73,17 +73,22 @@ Notes:
   `/run/ombra-leak`) and safe to re-run. They never reboot or reconfigure
   the VM.
 
-## The seven tests and what each proves
+## The nine tests and what each proves
 
 | # | Test | Attack it simulates | Pass condition |
 |---|------|--------------------|----------------|
 | 1 | non-tor egress fails | a compromised non-tor process (runs the probes as uid `ombra` via `su`, not root) calling home, e.g. an apt mirror or update beacon | `curl` to `check.torproject.org:443` and `deb.debian.org:80` dies with **connection refused (curl exit 7)** — the output chain's `counter reject`, not a timeout (28 would mean DROP semantics, 0 would mean the firewall is off); `tor@default` journal shows `Bootstrapped 100% (done)` |
 | 2 | SOCKS reaches the real Tor network | verifying the sanctioned path actually lands on Tor, not a look-alike | `curl --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/api/ip` returns `IsTor:true` with a public, non-RFC1918 address; only the booleans are reported |
-| 3 | non-tor DNS fails | a process trying to leak DNS to a public resolver, bypassing Tor | a raw UDP/53 query to `9.9.9.9` gets no answer (rejected by the output chain); the same query to Tor's DNSPort `127.0.0.1:5353` returns NOERROR; `getent hosts` resolves |
-| 4 | live ruleset == shipped file | silent drift between the reviewed `gateway/rootfs/etc/nftables.conf` and what the kernel is actually enforcing | counter-normalized diff of two **nft-rendered** rulesets is empty (see below); plus structural asserts: NOTHING on `:22` (no ssh rule, no listener, no sshd artifacts), `meta skuid` == `debian-tor`'s uid, forward chain = `policy drop` + exactly one forwarding-prohibited **reject**, the desktop-facing intnet accepts are port-scoped (no DHCP rule on the intnet, the whole-/24 accept absent, no ruleset match for the `ombra-torctl` uid), and the stray-DNS redirect (foreign UDP/53 → dnsmasq) exists |
+| 3 | no DNS path | a process trying to leak DNS to a public resolver, or a desktop feeding queries into Tor | a raw UDP/53 query to `9.9.9.9` gets no answer (rejected by the output chain); nothing answers on Tor's former DNSPort `127.0.0.1:5353`; `getent hosts` resolves nothing (dnsmasq forwards nowhere); `tor-resolve` through SOCKS still resolves |
+| 4 | live ruleset == shipped file | silent drift between the reviewed `gateway/rootfs/etc/nftables.conf` and what the kernel is actually enforcing | counter-normalized diff of two **nft-rendered** rulesets is empty (see below); plus structural asserts: NOTHING on `:22` (no ssh rule, no listener, no sshd artifacts), `meta skuid` == `debian-tor`'s uid, forward chain = `policy drop` + exactly one forwarding-prohibited **reject**, the desktop-facing intnet accepts are port-scoped (no DHCP rule on the intnet, the whole-/24 accept absent, no ruleset match for the `ombra-torctl` uid), the stray-DNS redirect (foreign UDP/53 → dnsmasq) exists, and no rule mentions the removed transparent port 9040 |
 | 5 | no unexpected listeners | a debugging daemon or stray port left bound (every listener is attack surface from NAT or intnet) | `ss -ltnu` sockets ⊆ the probe's whitelist; unexpected sockets are printed actual-vs-expected |
 | 6 | IPv6 absent | the classic dual-stack bypass (AAAA preference, v6-capable resolvers) | no global-scope v6 address; either the stack is absent (`ipv6.disable=1`, no `/proc/sys/net/ipv6`) or `disable_ipv6=1` on `all` and every interface |
 | 7 | control-port filter isolation | a bug in the filter inheriting Tor's upstream egress or its raw cookie | `ombra-torctl-filter` runs as `ombra-torctl`; a curl as that uid is refused (exit 7); `/run/tor/control.authcookie` is unreadable to `ombra` |
+| 8 | Tor's desktop-facing surface is SOCKS only | the 2026 gateway escape (TROVE-2026-036): flood Tor's automap pool through DNS and resolve requests, then corrupt the freed entry | the configuration Tor runs with (`tor --dump-config short`) has no `AutomapHostsOnResolve`, `VirtualAddrNetwork*`, `TransPort`, `DNSPort`, `NATDPort` or `HTTPTunnelPort` and has `NoExec 1`; a resolve request for an onion name returns no address |
+| 9 | hijacked-Tor probe | code running inside the Tor daemon, as the one uid allowed out, looking for the public address or the local network | as `debian-tor`: a UDP query to a public resolver gets no answer; TCP to the upstream router (ports 80 and 5351), to private, link-local and carrier-NAT addresses is refused (curl exit 7). The Tor process has a system-call filter (`Seccomp: 2`), no-new-privileges and, on the gateway VM, the label `system_tor (enforce)`. The unit restarts on failure through the tripwire (`ombra-tor-tripwire gate` and `record`), never after `SIGSYS`, with `MemoryDenyWriteExecute` |
+
+Test 9 cannot show that a hijacked Tor is unable to learn the public address: Tor's guard reports it inside the
+protocol (threat model, Tor daemon compromise). It shows that the other routes are closed and the confinement is live.
 
 ### Why test 4 renders the file in a throwaway netns
 
@@ -102,15 +107,14 @@ nft itself.
 
 - the gateway's own `udp` client socket on the upstream NIC
   (`%ombra-upstream:68`) — systemd-networkd DHCP on the upstream side.
-- dnsmasq `10.55.10.1:53` (tcp/udp), Tor `10.55.10.1:9050`/`:9150`/`:9040`,
-  the filter `10.55.10.1:9052`, and loopback `9050`/`9051`/`5353`.
-- `getent hosts` may return an AAAA through Tor (glibc asks v6 first).
-  That is a Tor-DNS answer, not a v6 leak; no v6 route exists (test 6).
+- dnsmasq `10.55.10.1:53` (tcp/udp), Tor `10.55.10.1:9050`/`:9150`,
+  the filter `10.55.10.1:9052`, and loopback `9050`/`9051`.
+- Not on the list since 1.2.2: Tor's TransPort (`:9040`) and DNSPort (loopback `5353`). Either one listening fails test 5.
 
 ## Canonical probe
 
 `gateway/rootfs/usr/local/sbin/ombra-leak-probe` is the only copy of the
-seven tests; it ships root-owned in the image. POSIX sh (dash) plus bash
+nine tests; it ships root-owned in the image. POSIX sh (dash) plus bash
 for the UDP probes, timeout-bounded.
 
 ## Files

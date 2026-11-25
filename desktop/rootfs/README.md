@@ -35,7 +35,9 @@ Hostname is `ombra`, set in the preseed and repaired by the late command.
 | `etc/network/interfaces` | Loopback only, so NetworkManager manages the NIC |
 | `etc/NetworkManager/system-connections/ombra-intnet.nmconnection` | Static 10.55.10.100/24, gateway and DNS 10.55.10.1, IPv6 off, matches any ethernet device (no MAC pin); must be mode 600 or NetworkManager ignores it |
 | `etc/NetworkManager/conf.d/10-ombra-no-auto-default.conf` | `no-auto-default=*`: no auto-created DHCP profile that could route around the gateway |
-| `etc/nftables.conf` | The desktop's own firewall: input, output and forward policy drop; the private link and ICMP echo are the accepts. The single VM edition replaces it with `desktop/single/etc/nftables.conf` |
+| `etc/nftables.conf` | The desktop's own firewall: input, output and forward policy drop; the private link and ICMP echo are the accepts. A nat table turns every DNS question and every TCP connection not addressed to the gateway around to `ombra-tproxy` on loopback, with per-user limits on both. |
+| `usr/local/bin/ombra-tproxy` + `etc/systemd/system/ombra-tproxy.service` and `.socket` (systemd holds its two ports, so no other program can take them) | Transparent proxy for programs without proxy settings (`ssh host`, scripts): a local DNS stub that answers with placeholder addresses, and a TCP port that hands each redirected connection to the gateway's Tor as SOCKS `CONNECT name:port`. Unprivileged dynamic user; may reach only loopback and the private link. Source: `core/src/tproxy.rs` |
+| `usr/local/bin/ombra-gateway-notify` + `etc/xdg/autostart/ombra-gateway-notify.desktop` | Session notices about the gateway's Tor: it died unexpectedly, it is stopped, or Debian has a newer one. Asks the gateway's control-port filter once a minute |
 | `etc/systemd/system/nftables.service.d/10-ombra-keep.conf` | Empty `ExecStop=`: the ruleset stays loaded through shutdown instead of being flushed while the network is still up |
 | `etc/sysctl.d/60-ombra-desktop.conf` | Kernel hardening and IPv6 off (the IPv6 keys carry a `-` prefix: `ipv6.disable=1` on the kernel line removes them); no oops-limit pinning, so a panic stays on screen |
 | `usr/local/sbin/ombra-timesync` + timer | Tor-only clock sync; writes `ok` or `stale` to `/run/ombra/timesync` for `ombra-statusd` |
@@ -74,7 +76,7 @@ is the only network manager on the desktop).
 | `etc/skel/.config/systemd/user/ombra-statusd.service`, `.config/autostart/org.ombra.status-ensure.desktop` | Start the Tor-status daemon with the session |
 | `etc/xdg/autostart/org.kde.discover.notifier.desktop`, `org.kde.kdeconnect.daemon.desktop` | `Hidden=true` tombstones under upstream's filenames; the late command also purges and masks both |
 | `usr/share/plasma/plasmoids/org.kde.plasma.clipboard/metadata.json` | Ombra override of KDE's clipboard applet metadata: tray category removed, `EnabledByDefault=false`, so klipper never runs and history is never written |
-| `usr/local/bin/kitty` | Wrapper that every kitty launch reaches (`/usr/local/bin` precedes `/usr/bin`): sets `LIBGL_ALWAYS_SOFTWARE=1`, because on Fusion's 3D device kitty drew its text near-black; KWin stays on the hardware device |
+| `usr/local/bin/kitty` | Wrapper that every kitty launch reaches (`/usr/local/bin` precedes `/usr/bin`): sets `LIBGL_ALWAYS_SOFTWARE=1`, so kitty draws its text correctly on Fusion's 3D device; KWin stays on the hardware device |
 | `usr/local/share/applications/kitty.desktop`, `tor-browser.desktop` | Launcher overrides by XDG precedence; Tor Browser uses an absolute icon path and `StartupWMClass` so the dock shows one tile |
 
 ## Plasma plasmoids

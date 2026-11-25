@@ -1,0 +1,40 @@
+#!/bin/sh
+# ombra-tor-tripwire — counts abnormal deaths of the Tor daemon and decides whether it may start again.
+#   record   ExecStopPost of tor@default: a death by signal (crash, system-call filter kill, out of memory, hang)
+#            adds one to /run/ombra/tor-crashes; a kill by the system-call filter also creates /run/ombra/tor-killed
+#   gate     ExecCondition of tor@default: refuses the start after a filter kill or a second crash in this boot
+# State lives in /run: restarting the gateway clears it. The control-port filter reports it to the desktop
+# (GETINFO ombra/gateway-state) and ombra-systemcheck prints it. Nothing here records what Tor was doing.
+set -u
+D=/run/ombra
+count() { n=$(cat "$D/tor-crashes" 2>/dev/null); case "$n" in ''|*[!0-9]*) n=0 ;; esac; echo "$n"; }
+
+case "${1:-}" in
+    record)
+        case "${SERVICE_RESULT:-}" in
+            signal|core-dump|oom-kill|watchdog) ;;
+            *) exit 0 ;;
+        esac
+        mkdir -p "$D" && chmod 0755 "$D"
+        n=$(($(count) + 1))
+        echo "$n" > "$D/tor-crashes"; chmod 0644 "$D/tor-crashes"
+        if [ "${EXIT_STATUS:-}" = SYS ]; then
+            : > "$D/tor-killed"; chmod 0644 "$D/tor-killed"
+            echo "ombra-tor-tripwire: Tor was stopped by its system-call filter; it stays down until the gateway is restarted" >&2
+        else
+            echo "ombra-tor-tripwire: Tor died unexpectedly (${SERVICE_RESULT:-?}/${EXIT_STATUS:-?}), $n time(s) this boot" >&2
+        fi
+        ;;
+    gate)
+        if [ -e "$D/tor-killed" ]; then
+            echo "ombra-tor-tripwire: not starting Tor: it was stopped by its system-call filter. Restart the gateway." >&2
+            exit 1
+        fi
+        if [ "$(count)" -ge 2 ]; then
+            echo "ombra-tor-tripwire: not starting Tor: it died unexpectedly twice in this boot. Restart the gateway." >&2
+            exit 1
+        fi
+        ;;
+    *) echo "usage: ombra-tor-tripwire record|gate" >&2; exit 2 ;;
+esac
+exit 0

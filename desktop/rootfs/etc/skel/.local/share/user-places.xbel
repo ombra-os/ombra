@@ -41,15 +41,4 @@
    </metadata>
   </info>
  </bookmark>
- <bookmark href="file:///mnt/transfer/shared">
-  <title>Mac Shared Folder</title>
-  <info>
-   <metadata owner="http://freedesktop.org">
-    <bookmark:icon name="folder-sync"/>
-   </metadata>
-   <metadata owner="http://www.kde.org">
-    <ID>ombra-shared-folder</ID>
-   </metadata>
-  </info>
- </bookmark>
 </xbel>

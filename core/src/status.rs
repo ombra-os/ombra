@@ -26,6 +26,11 @@ pub const EXIT_CHECK_TTL_SECS: u64 = 900;
 /// A failed exit check is retried this often.
 pub const EXIT_RETRY_SECS: u64 = 120;
 pub const FORCE_CACHE_ENV: &str = "OMBRA_STATUS_FORCE_CACHE";
+/// A cached verdict older than this is not shown at all: the daemon rewrites it every 30 s, so by then it has stopped.
+pub const CACHE_STALE_SECS: u64 = 180;
+/// A cache stamped further in the future than this (the clock was stepped back) is not trusted either.
+pub const CACHE_FUTURE_SLACK_SECS: u64 = 10;
+const CACHE_MAX_BYTES: u64 = 4096;
 pub const TIMESYNC_STATE_FILES: &[&str] = &["/run/ombra/timesync", "/var/lib/ombra/timesync"];
 
 /// Kill deadlines so a hung probe never wedges the daemon.
@@ -244,9 +249,11 @@ fn circuit_established() -> Option<bool> {
 
 fn exit_is_tor() -> bool {
     // body substring, not exit status; body dropped here
+    // -q first: no ~/.curlrc, which could otherwise write the answer (the exit address) to a file
     run_captured(
-        "curl",
+        "/usr/bin/curl",
         &[
+            "-q",
             "-sS",
             "--max-time",
             "40",
@@ -263,7 +270,7 @@ impl Probes for ExecProbes {
     fn gateway_link(&mut self) -> bool {
         // ping, not a 9050 connect: link state must stay distinct from the Tor probe
         matches!(
-            run_captured("ping", &["-c1", "-W3", GATEWAY], PING_DEADLINE),
+            run_captured("/usr/bin/ping", &["-c1", "-W3", GATEWAY], PING_DEADLINE),
             Some((true, _))
         )
     }
@@ -274,9 +281,14 @@ impl Probes for ExecProbes {
                 self.exit_check = None;
                 false
             }
-            // an unanswered control query falls back to the exit check, through the same cache
-            None | Some(true) => {
-                if let Some(ok) = cached_exit_verdict(self.exit_check, Instant::now()) {
+            // an unanswered control query falls back to the exit check; without the gateway's word that circuits are up,
+            // an earlier pass is only believed for the short retry period, not the long one
+            unanswered @ (None | Some(true)) => {
+                let cached = match (unanswered, self.exit_check) {
+                    (None, Some((at, true))) if at.elapsed() >= Duration::from_secs(EXIT_RETRY_SECS) => None,
+                    (_, c) => c,
+                };
+                if let Some(ok) = cached_exit_verdict(cached, Instant::now()) {
                     return ok;
                 }
                 let ok = exit_is_tor();
@@ -287,10 +299,13 @@ impl Probes for ExecProbes {
     }
 
     fn gateway_dns_onion(&mut self) -> bool {
-        // first answer line must land in 10.66.0.0/16; answer dropped here
+        // the question is answered on this machine by ombra-tproxy's stub (the firewall turns every DNS packet around
+        // to it) with a placeholder from its pool; an older desktop got 10.66.x from the gateway. Any other answer
+        // means a resolver outside Ombra replied. Answer dropped here
         run_captured(
-            "dig",
+            "/usr/bin/dig",
             &[
+                "-r",
                 "+time=12",
                 "+tries=1",
                 "+short",
@@ -303,7 +318,8 @@ impl Probes for ExecProbes {
         .is_some_and(|(_, out)| {
             out.lines()
                 .next()
-                .is_some_and(|l| l.trim().starts_with("10.66."))
+                .and_then(|l| l.trim().parse::<std::net::Ipv4Addr>().ok())
+                .is_some_and(crate::tproxy::in_pool)
         })
     }
 }
@@ -402,16 +418,62 @@ pub fn env_forces_cache(value: Option<&std::ffi::OsStr>) -> bool {
     value.is_some_and(|v| !v.is_empty())
 }
 
+/// How old a snapshot is at `now`; `None` when it is stamped in the future (beyond a little slack).
+fn snapshot_age(snap: &Snapshot, now: u64) -> Option<u64> {
+    if snap.checked_unix > now.saturating_add(CACHE_FUTURE_SLACK_SECS) {
+        None
+    } else {
+        Some(now.saturating_sub(snap.checked_unix))
+    }
+}
+
 fn fresh_cache_snapshot(cache: &Path, now: u64) -> Option<Snapshot> {
     let snap = read_cache_snapshot(cache)?;
-    (now.saturating_sub(snap.checked_unix) < CACHE_TTL_SECS).then_some(snap)
+    (snapshot_age(&snap, now)? < CACHE_TTL_SECS).then_some(snap)
 }
 
+/// Only a small regular file that belongs to this user, opened without following a link and without blocking: in the
+/// /tmp fallback another user can put a fifo, a link or a huge file at the cache's name.
 fn read_cache_snapshot(cache: &Path) -> Option<Snapshot> {
-    parse_snapshot(&fs::read_to_string(cache).ok()?)
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+    let mut f = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(cache)
+        .ok()?;
+    let meta = f.metadata().ok()?;
+    if !meta.file_type().is_file() || meta.uid() != uid() || meta.len() > CACHE_MAX_BYTES {
+        return None;
+    }
+    let mut text = String::new();
+    f.read_to_string(&mut text).ok()?;
+    parse_snapshot(&text)
 }
 
-/// forced ⇒ cache however old (no probing); else fresh cache; else probe and serve fresh.
+/// Written beside and renamed over: a reader never sees half a snapshot, and nothing already at the name is followed
+/// or written into.
+fn write_cache(cache: &Path, text: &str) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let tmp = cache.with_extension(format!("tmp{}", std::process::id()));
+    let _ = fs::remove_file(&tmp);
+    let res = (|| {
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&tmp)?;
+        f.write_all(text.as_bytes())?;
+        fs::rename(&tmp, cache)
+    })();
+    if res.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    res
+}
+
+/// forced ⇒ the cache, never a probe: but only while it is recent (the daemon rewrites it every 30 s; an older one
+/// means the daemon has stopped, and its last verdict must not stay on screen); else fresh cache; else probe.
 pub fn once_snapshot(
     probes: &mut dyn Probes,
     cache: &Path,
@@ -420,13 +482,14 @@ pub fn once_snapshot(
 ) -> Snapshot {
     if force_cache {
         return read_cache_snapshot(cache)
+            .filter(|s| snapshot_age(s, now).is_some_and(|age| age < CACHE_STALE_SECS))
             .unwrap_or_else(|| Snapshot::never_probed(read_timesync()));
     }
     if let Some(cached) = fresh_cache_snapshot(cache, now) {
         return cached;
     }
     let snap = refresh(probes);
-    let _ = fs::write(cache, snap.to_json());
+    let _ = write_cache(cache, &snap.to_json());
     snap
 }
 
@@ -500,7 +563,7 @@ fn daemon_on(
                         };
                         let state = snap.state;
                         *lock(&snapshot) = snap;
-                        let _ = fs::write(&cache, line);
+                        let _ = write_cache(&cache, &line);
                         last = Some((Instant::now(), state));
                     }
                     std::thread::sleep(TICK);
@@ -844,15 +907,22 @@ mod tests {
     }
 
     #[test]
-    fn forced_cache_serves_any_age_without_probing() {
+    fn forced_cache_never_probes_and_stops_showing_a_stale_verdict() {
         let dir = tempdir("forced");
         let cache = dir.join("cache");
         let mut probes = FakeProbes::all_ok();
 
         let first = once_snapshot(&mut probes, &cache, 0, false);
-        let forced = once_snapshot(&mut probes, &cache, first.checked_unix + 999_999, true);
-        assert_eq!(probes.calls.get(), 3, "forced: no probes, however old");
-        assert_eq!(forced, first, "the ancient snapshot is served");
+        let forced = once_snapshot(&mut probes, &cache, first.checked_unix + CACHE_STALE_SECS - 1, true);
+        assert_eq!(probes.calls.get(), 3, "forced: no probes");
+        assert_eq!(forced, first, "a recent snapshot is served");
+        // the daemon stopped rewriting it: its last "ok" must not stay on screen
+        let stale = once_snapshot(&mut probes, &cache, first.checked_unix + CACHE_STALE_SECS, true);
+        assert_eq!(stale.state, State::Unknown);
+        // nor a snapshot from the future (the clock was stepped back)
+        let future = once_snapshot(&mut probes, &cache, first.checked_unix.saturating_sub(3600), true);
+        assert_eq!(future.state, State::Unknown);
+        assert_eq!(probes.calls.get(), 3, "still no probes");
         let _ = fs::remove_dir_all(&dir);
     }
 

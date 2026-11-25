@@ -1,0 +1,43 @@
+[Unit]
+Description=Ombra transparent proxy (programs without proxy settings reach Tor through the gateway)
+Requires=ombra-tproxy.socket
+After=ombra-tproxy.socket network.target nftables.service
+
+[Service]
+ExecStart=/usr/local/bin/ombra-tproxy
+Restart=always
+RestartSec=2
+# its two loopback sockets come from ombra-tproxy.socket; it makes one outgoing connection per client, to the gateway's
+# SOCKS port: no privilege at all
+DynamicUser=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+IPAddressDeny=any
+IPAddressAllow=127.0.0.0/8 10.55.10.0/24
+LimitNOFILE=8192
+LimitCORE=0
+TasksMax=3200
+# the name table is bounded (about 8 MB of names); this is the backstop
+MemoryMax=192M
+
+[Install]
+WantedBy=multi-user.target

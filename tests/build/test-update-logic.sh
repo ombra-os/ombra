@@ -294,36 +294,15 @@ reset_root desktop 1.1
 run info; check "info prints the two-VM desktop's facts" '[ "$RC" = 0 ] && grep -qx edition=two-vm "$T/out" && grep -qx role=desktop "$T/out" && grep -qx update_role=desktop "$T/out" && grep -qx version=1.1 "$T/out" && grep -qx mode=persistent "$T/out" && grep -qx home_on_root=yes "$T/out"'
 FAKE_HOME_SRC=/dev/mapper/vg0-home run info; check "info sees a separate home volume" 'grep -qx home_on_root=no "$T/out"'
 FAKE_FSTYPE=overlay run info; check "info reports an Amnesic boot" 'grep -qx mode=amnesic "$T/out"'
-echo single > "$R/etc/ombra/edition"
-run info; check "info on the single edition: role desktop, update role single" 'grep -qx edition=single "$T/out" && grep -qx role=desktop "$T/out" && grep -qx update_role=single "$T/out"'
+echo single > "$R/etc/ombra/edition"; run info; check "a machine of the discontinued single VM edition is refused (exit 2)" '[ "$RC" = 2 ] && grep -q "discontinued" "$T/out"'
+run check; check "and it never reads the index" '[ "$RC" = 2 ]'
 echo bogus > "$R/etc/ombra/edition"; run info; check "an unknown edition is a usage error (exit 2)" '[ "$RC" = 2 ]'
-reset_root gateway 1.1; echo single > "$R/etc/ombra/edition"; run info; check "a single-edition gateway role is refused (exit 2)" '[ "$RC" = 2 ]'
 
 reset_root desktop 1.1; mkbundle desktop 9.9 "$T/pl" "$SRV/updates/d.update"
 index "issued=$NOW" "expires=$((NOW + 86400))" "desktop.version=9.9" "desktop.bundle=d.update" "desktop.sha256=$(h "$SRV/updates/d.update")"
 run apply; FAKE_HOME_SRC=/dev/mapper/vg0-home run rollback
 check "rollback with a separate home volume says the home folder is not affected" '[ "$RC" = 0 ] && grep -q "not affected" "$T/out" && ! grep -q "is lost" "$T/out"'
 
-# ---- the single edition ----
-mkdir -p "$T/pls/var/lib/ombra" "$T/pls/usr/share/ombra"; echo image-v2 > "$T/pls/var/lib/ombra/gateway.img"
-printf '%s  gateway.img\n' "$(h "$T/pls/var/lib/ombra/gateway.img")" > "$T/pls/usr/share/ombra/gateway.img.sha256"
-reset_root desktop 1.1; echo single > "$R/etc/ombra/edition"
-index "issued=$NOW" "expires=$((NOW + 86400))" "desktop.version=9.8" "single.version=9.9"
-run check; check "the single edition reads single.* from the index" '[ "$(state)" = available ] && [ "$(sed -n 2p "$R/run/ombra/update")" = 9.9 ]'
-mkbundle desktop 9.9 "$T/pl" "$SRV/updates/d.update"
-index "issued=$NOW" "expires=$((NOW + 86400))" "single.version=9.9" "single.bundle=d.update" "single.sha256=$(h "$SRV/updates/d.update")"
-run apply; check "the single edition refuses a two-VM desktop bundle" 'unchanged && grep -q "different machine" "$T/out"'
-mkbundle single 9.9 "$T/pls" "$SRV/updates/s.update"
-index "issued=$NOW" "expires=$((NOW + 86400))" "single.version=9.9" "single.bundle=s.update" "single.sha256=$(h "$SRV/updates/s.update")"
-run apply; check "a single bundle with a matching gateway image applies and says the restart picks it up" '[ "$RC" = 0 ] && [ -e "$LV/snap" ] && [ "$(cat "$R/var/lib/ombra/gateway.img")" = image-v2 ] && grep -q "gateway image was replaced" "$T/out"'
-reset_root desktop 1.1; echo single > "$R/etc/ombra/edition"
-cp -R "$T/pls" "$T/plb"; printf '%064d  gateway.img\n' 0 > "$T/plb/usr/share/ombra/gateway.img.sha256"
-mkbundle single 9.9 "$T/plb" "$SRV/updates/s.update"
-index "issued=$NOW" "expires=$((NOW + 86400))" "single.version=9.9" "single.bundle=s.update" "single.sha256=$(h "$SRV/updates/s.update")"
-run apply; check "a gateway image that does not match its checksum fails the update (exit 3, merge scheduled)" '[ "$RC" = 3 ] && [ -e "$LV/merge" ] && grep -q "does not match its checksum" "$T/out"'
-reset_root desktop 1.1; mkbundle desktop 9.9 "$T/pls" "$SRV/updates/d.update"
-index "issued=$NOW" "expires=$((NOW + 86400))" "desktop.version=9.9" "desktop.bundle=d.update" "desktop.sha256=$(h "$SRV/updates/d.update")"
-run apply; check "the two-VM desktop does not check a gateway image" '[ "$RC" = 0 ] && ! grep -q "gateway image" "$T/out"'
 
 # ---- Debian updates (security) ----
 mkboot() { mkdir -p "$R/boot/grub" "$R/boot/efi/EFI/debian"; echo old > "$R/boot/vmlinuz"; echo cfg > "$R/boot/grub/grub.cfg"; echo esp > "$R/boot/efi/EFI/debian/grubaa64.efi"; }

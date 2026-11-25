@@ -1,0 +1,26 @@
+[Unit]
+Description=Ombra: is the newest Tor from Debian's security archive installed (checked through Tor)
+After=tor@default.service
+StartLimitIntervalSec=1h
+StartLimitBurst=6
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ombra-tor-freshness
+TimeoutStartSec=300
+# Tor still bootstrapping, or Debian unreachable through this circuit: try again later
+Restart=on-failure
+RestartSec=10min
+RestartForceExitStatus=75
+SuccessExitStatus=0
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native

@@ -23,7 +23,9 @@ use crate::theme;
 pub const GW: &str = "10.55.10.1";
 pub const SOCKS_ADDR: &str = "10.55.10.1:9050";
 pub const TOR_CHECK_URL: &str = "https://check.torproject.org/api/ip";
-/// A REAL onion — only Tor's DNSPort automaps .onion names (into 10.66.*).
+/// An onion name: it must answer with a placeholder from the pool 10.64.0.0/10. On the desktop the local stub of
+/// ombra-tproxy gives it; on the gateway its own resolver answers 10.66.0.1. Neither forwards anything (before 1.2.2
+/// the answer came from Tor's automap, inside 10.66.0.0/16).
 pub const DNS_PROBE_ONION: &str = "2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion";
 pub const CURL_WRAP_TIMEOUT: &str = "45";
 pub const CURL_MAX_TIME: &str = "30";
@@ -93,14 +95,14 @@ pub fn tor_section(body: &str) -> Section {
     }
 }
 
-/// dns: an answer OUTSIDE 10.66.* is the alarm state — the onion resolved without Tor.
+/// dns: an answer OUTSIDE the placeholder pool (10.64.0.0/10) is the alarm state — a resolver outside Ombra answered.
 pub fn dns_section(first_answer: Option<&str>) -> Section {
     match first_answer {
-        Some(a) if !a.is_empty() && a.starts_with("10.66.") => {
-            Section::new("dns", "resolves via tor, .onion automaps", State::Ok)
+        Some(a) if a.trim().parse::<std::net::Ipv4Addr>().is_ok_and(crate::tproxy::in_pool) => {
+            Section::new("dns", "names resolve inside ombra", State::Ok)
         }
         Some(a) if !a.is_empty() => {
-            Section::new("dns", "resolves but .onion automap broken", State::Fail)
+            Section::new("dns", "answered by an outside resolver", State::Fail)
         }
         _ => Section::new("dns", "gateway resolver not answering", State::Fail),
     }
@@ -185,7 +187,7 @@ pub struct SystemRunner;
 
 impl ProbeRunner for SystemRunner {
     fn ping_gateway(&self) -> bool {
-        Command::new("ping")
+        Command::new("/usr/bin/ping")
             .args(["-c1", "-W3", GW])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -204,8 +206,10 @@ impl ProbeRunner for SystemRunner {
     }
 
     fn dns_first_answer(&self) -> Option<String> {
-        let out = Command::new("dig")
+        // -r: no ~/.digrc; absolute paths: the user's PATH does not choose the programs behind the verdict
+        let out = Command::new("/usr/bin/dig")
             .args([
+                "-r".to_string(),
                 format!("+time={DIG_TIME}"),
                 "+tries=1".to_string(),
                 "+short".to_string(),
@@ -223,10 +227,12 @@ impl ProbeRunner for SystemRunner {
 
 /// Outer timeout belt over curl; the retry belongs to the caller.
 fn socks_probe() -> String {
-    Command::new("timeout")
+    // -q first: no ~/.curlrc, which could otherwise write the answer (the exit address) to a file
+    Command::new("/usr/bin/timeout")
         .arg(CURL_WRAP_TIMEOUT)
-        .arg("curl")
+        .arg("/usr/bin/curl")
         .args([
+            "-q",
             "-sS",
             "--max-time",
             CURL_MAX_TIME,
@@ -575,13 +581,17 @@ mod tests {
     }
 
     #[test]
-    fn dns_ok_iff_first_answer_automaps_into_10_66() {
+    fn dns_ok_iff_first_answer_is_a_placeholder_from_the_pool() {
         let ok = dns_section(Some("10.66.72.1"));
         assert_eq!(
             (ok.label, ok.verdict.as_str(), ok.state),
-            ("dns", "resolves via tor, .onion automaps", State::Ok)
+            ("dns", "names resolve inside ombra", State::Ok)
         );
-        assert_eq!(dns_section(Some("10.66.")).state, State::Ok);
+        // anywhere in the placeholder pool is fine; a half-written address or one outside it is not
+        assert_eq!(dns_section(Some("10.100.3.7")).state, State::Ok);
+        assert_eq!(dns_section(Some("10.66.")).state, State::Fail);
+        assert_eq!(dns_section(Some("10.55.10.1")).state, State::Fail);
+        assert_eq!(dns_section(Some("93.184.216.34")).state, State::Fail);
         assert_eq!(dns_section(Some("1.2.3.4")).state, State::Fail);
     }
 
@@ -600,7 +610,7 @@ mod tests {
     fn dns_broken_verdict_is_a_fixed_string() {
         assert_eq!(
             dns_section(Some("93.184.216.34")).verdict,
-            "resolves but .onion automap broken"
+            "answered by an outside resolver"
         );
     }
 
@@ -705,7 +715,7 @@ mod tests {
             "O M B R A\n{rule}\n\
              gateway  [ok]   reachable\n\
              tor      [ok]   exiting through tor\n\
-             dns      [ok]   resolves via tor, .onion automaps\n\n\
+             dns      [ok]   names resolve inside ombra\n\n\
              all traffic routes through tor (gateway)\n",
             rule = "-".repeat(RULE_W),
         );
@@ -768,7 +778,7 @@ mod tests {
             "tor",
             "exiting through tor",
             "dns",
-            "resolves via tor, .onion automaps",
+            "names resolve inside ombra",
             "all traffic routes through tor (gateway)",
         ] {
             assert!(text.contains(needle), "missing {needle:?} in:\n{text}");

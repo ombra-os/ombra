@@ -3,8 +3,8 @@
 # the OPSEC gate (scripts/release-opsec-check.sh), which records each passed file's sha256 in build/releases/.opsec-ok.
 # usage: bash scripts/upload-r2.sh [file ...]
 #          default: every build/releases/*.vmwarevm.zip and *.utm.zip, then SHA256SUMS.txt and SHA256SUMS.txt.sig.
-#          Every archive SHA256SUMS.txt names must be here and match; a missing .sig is warned about loudly
-#          (scripts/update/sign-sums.sh writes it), a .sig that does not verify against build/update-pubkey.pem stops it.
+#          Nothing is uploaded unsigned: SHA256SUMS.txt and its .sig (scripts/update/sign-sums.sh) must exist and verify
+#          against build/update-pubkey.pem, every archive uploaded must match its line, and the sums and .sig go together.
 #        bash scripts/upload-r2.sh --prefix updates/ [file ...]
 #          update files only (*.update, latest.txt, apps.txt and their .sig; apps.txt alone for an app-only release;
 #          default: build/releases/updates/), uploaded under
@@ -55,21 +55,21 @@ if [ -z "$PREFIX" ]; then
   fi
   [ "${#FILES[@]}" -gt 0 ] && [ -e "${FILES[0]}" ] || { echo "FATAL: nothing to upload" >&2; exit 1; }
   SUMS="$REPO/build/releases/SHA256SUMS.txt"
-  if [ -f "$SUMS" ]; then
-    # every archive the published sums name must exist here, or the bucket would list hashes for files it lacks
-    while read -r _ n; do
-      [ -z "${n:-}" ] || [ -f "$REPO/build/releases/$n" ] || { echo "FATAL: SHA256SUMS.txt names $n, which is missing in build/releases" >&2; exit 1; }
-    done < "$SUMS"
-    if [ -f "$SUMS.sig" ]; then
-      ed25519_ok "$SUMS" "$SUMS.sig" || { echo "FATAL: SHA256SUMS.txt.sig does not verify against build/update-pubkey.pem (re-sign after the last export)" >&2; exit 1; }
-    else
-      echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
-      echo "WARNING: SHA256SUMS.txt.sig is missing: the hashes go out UNSIGNED, so" >&2
-      echo "anyone who controls the bucket can swap images and hashes together." >&2
-      echo "Sign first: bash scripts/update/sign-sums.sh <private-key> build/releases/SHA256SUMS.txt" >&2
-      echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
-    fi
-  fi
+  # nothing goes out unsigned: every archive must be named in SHA256SUMS.txt, and SHA256SUMS.txt must carry a
+  # signature that verifies against the shipped public key, before any file is uploaded
+  [ -f "$SUMS" ] || { echo "FATAL: build/releases/SHA256SUMS.txt is missing: nothing is uploaded unsigned" >&2; exit 1; }
+  [ -f "$SUMS.sig" ] || { echo "FATAL: SHA256SUMS.txt.sig is missing: sign first (scripts/update/sign-sums.sh); nothing is uploaded unsigned" >&2; exit 1; }
+  ed25519_ok "$SUMS" "$SUMS.sig" || { echo "FATAL: SHA256SUMS.txt.sig does not verify against build/update-pubkey.pem (re-sign after the last export)" >&2; exit 1; }
+  # every archive the published sums name must exist here, or the bucket would list hashes for files it lacks
+  while read -r _ n; do
+    [ -z "${n:-}" ] || [ -f "$REPO/build/releases/$n" ] || { echo "FATAL: SHA256SUMS.txt names $n, which is missing in build/releases" >&2; exit 1; }
+  done < "$SUMS"
+  # the checksums and their signature go up together, never one without the other
+  has_sums=0; has_sig=0
+  for f in "${FILES[@]}"; do
+    case "$(basename "$f")" in SHA256SUMS.txt) has_sums=1 ;; SHA256SUMS.txt.sig) has_sig=1 ;; esac
+  done
+  [ "$has_sums" = "$has_sig" ] || { echo "FATAL: SHA256SUMS.txt and SHA256SUMS.txt.sig are uploaded together" >&2; exit 1; }
 else
   if [ "$#" -gt 0 ]; then IN=("$@"); else
     U="$REPO/build/releases/updates"; IN=("$U"/*.update "$U/latest.txt" "$U/latest.txt.sig")
@@ -125,7 +125,7 @@ for f in "${FILES[@]}"; do
   case "$f" in *-test*|*TEST*) echo "FATAL: refusing a test build: $f" >&2; exit 1 ;; esac
   ctype=application/octet-stream
   case "$name" in SHA256SUMS.txt|latest.txt|apps.txt) ctype="text/plain; charset=utf-8" ;; esac
-  if [ -z "$PREFIX" ] && [ -f "$SUMS" ] && [ "$name" != SHA256SUMS.txt ] && [ "$name" != SHA256SUMS.txt.sig ]; then
+  if [ -z "$PREFIX" ] && [ "$name" != SHA256SUMS.txt ] && [ "$name" != SHA256SUMS.txt.sig ]; then
     want="$(awk -v n="$name" '$2==n{print $1}' "$SUMS")"
     [ -n "$want" ] || { echo "FATAL: $name is not in SHA256SUMS.txt" >&2; exit 1; }
     have="$(shasum -a 256 "$f" | awk '{print $1}')"

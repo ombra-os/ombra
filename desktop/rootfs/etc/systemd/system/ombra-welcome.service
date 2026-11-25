@@ -8,6 +8,8 @@ Before=sddm.service
 After=systemd-user-sessions.service ombra-setup-gate.service
 
 [Service]
+# these hold the disk passphrase in memory: never a core dump
+LimitCORE=0
 Type=oneshot
 TTYPath=/dev/tty1
 StandardInput=tty

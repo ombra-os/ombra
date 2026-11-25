@@ -1,5 +1,0 @@
-# the system disk and its LUKS mapping are not user media; Dolphin errors when asked to open them
-# single edition: the user creates the VM, so the system disk is NVMe under Fusion or virtio (vda) under UTM
-KERNEL=="nvme[0-9]*", ENV{UDISKS_IGNORE}="1"
-KERNEL=="vd[a-z]*", ENV{UDISKS_IGNORE}="1"
-KERNEL=="dm-[0-9]*", ENV{UDISKS_IGNORE}="1"

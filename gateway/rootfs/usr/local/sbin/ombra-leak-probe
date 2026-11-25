@@ -8,7 +8,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
 FAILS=0
-TOTAL=7
+TOTAL=9
 LIVE_CONF=/etc/nftables.conf
 WORK=/run/ombra-leak-work
 OUT=/run/ombra-leak
@@ -43,19 +43,23 @@ dns_rcode() {
     [ $# -eq 4 ] && printf '%s' $(($4 & 15))
 }
 
+# the gateway has no DNS (test 3), so the refused-egress probes carry a public address themselves: any one will do,
+# the connection must be refused before a packet leaves
+PUBLIC_IP=9.9.9.9
+
 say '==== ombra gateway leak tests (root) ===='
 
-# [1/7] NON-TOR EGRESS FAILS: the only accept-to-internet is the debian-tor uid;
+# [1/9] NON-TOR EGRESS FAILS: the only accept-to-internet is the debian-tor uid;
 # curl must die with "connection refused" (exit 7 — 28 means REJECT flipped to DROP, 0 means the firewall is off).
-say '[1/7] non-tor egress fails (ombra -> internet must be REFUSED, not timed out)'
-reject_before=$(nft list chain inet filter output | grep 'reject comment' | grep -oE 'packets [0-9]+' | grep -oE '[0-9]+' | head -1)
+say '[1/9] non-tor egress fails (ombra -> internet must be REFUSED, not timed out)'
+reject_before=$(nft list chain inet filter output | grep 'reject comment "fail-closed' | grep -oE 'packets [0-9]+' | grep -oE '[0-9]+' | head -1)
 
-as_user ombra 'curl -q --connect-timeout 8 -sS -o /dev/null https://check.torproject.org/' >/dev/null 2>&1
+as_user ombra "curl -q --connect-timeout 8 -sS -o /dev/null --resolve check.torproject.org:443:$PUBLIC_IP https://check.torproject.org/" >/dev/null 2>&1
 rc1a=$?
-as_user ombra 'curl -q --connect-timeout 8 -sS -o /dev/null http://deb.debian.org/debian/' >/dev/null 2>&1
+as_user ombra "curl -q --connect-timeout 8 -sS -o /dev/null --resolve deb.debian.org:80:$PUBLIC_IP http://deb.debian.org/debian/" >/dev/null 2>&1
 rc1b=$?
 
-reject_after=$(nft list chain inet filter output | grep 'reject comment' | grep -oE 'packets [0-9]+' | grep -oE '[0-9]+' | head -1)
+reject_after=$(nft list chain inet filter output | grep 'reject comment "fail-closed' | grep -oE 'packets [0-9]+' | grep -oE '[0-9]+' | head -1)
 
 t1_ok=1
 if [ "$rc1a" -ne 7 ]; then
@@ -81,9 +85,9 @@ if [ "$t1_ok" -eq 1 ]; then
 fi
 [ "$t1_ok" -eq 1 ] || fail
 
-# [2/7] SOCKS REACHES THE REAL TOR NETWORK: "IsTor":true and a public IP; the body and
+# [2/9] SOCKS REACHES THE REAL TOR NETWORK: "IsTor":true and a public IP; the body and
 # the IP are validated in memory and dropped — only booleans reach the report.
-say '[2/7] SOCKS 127.0.0.1:9050 reaches check.torproject.org (IsTor confirmed)'
+say '[2/9] SOCKS 127.0.0.1:9050 reaches check.torproject.org (IsTor confirmed)'
 SOCKS_JSON=$(bounded 60 curl -sS --max-time 55 --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/api/ip 2>/dev/null)
 rc2=$?
 EXIT_IP=$(printf '%s' "$SOCKS_JSON" | sed -n 's/.*"IP":"\([0-9][0-9.]*\)".*/\1/p')
@@ -115,33 +119,39 @@ if [ "$t2_ok" -eq 1 ]; then
 fi
 [ "$t2_ok" -eq 1 ] || fail
 
-# [3/7] NON-TOR DNS FAILS: a direct query to a public resolver must die in the output
-# chain while Tor DNSPort (:5353) and the system resolver path both resolve.
-say '[3/7] non-tor DNS (public resolver 9.9.9.9) refused; Tor DNSPort + system resolver resolve'
+# [3/9] NO DNS PATH AT ALL: a direct query to a public resolver must die in the output chain, Tor must have no
+# DNSPort, and the system resolver path (resolv.conf -> dnsmasq) must resolve nothing: dnsmasq forwards nowhere.
+# Names are resolved only inside Tor, for a SOCKS client (tor-resolve below).
+say '[3/9] no DNS path: public resolver refused, no Tor DNSPort, dnsmasq forwards nothing; Tor resolves over SOCKS'
 t3_ok=1
 if [ -n "$(dns_rcode 9.9.9.9 53 5)" ]; then
     say '      FAIL: DNS query to public resolver 9.9.9.9 got an answer — cleartext DNS escape path!'
     t3_ok=0
 fi
-if [ "$(dns_rcode 127.0.0.1 5353 25)" != "0" ]; then
-    say '      FAIL: Tor DNSPort (127.0.0.1:5353) did not resolve deb.debian.org'
+if [ -n "$(dns_rcode 127.0.0.1 5353 4)" ]; then
+    say '      FAIL: something answers DNS on 127.0.0.1:5353 — Tor has a DNSPort again'
     t3_ok=0
 fi
-if ! getent hosts deb.debian.org >/dev/null 2>&1; then
-    say '      FAIL: getent hosts (nss -> resolv.conf) did not resolve'
+if getent hosts deb.debian.org >/dev/null 2>&1; then
+    say '      FAIL: getent hosts resolved a public name — dnsmasq forwards queries somewhere'
+    t3_ok=0
+fi
+if [ -z "$(bounded 40 tor-resolve deb.debian.org 127.0.0.1:9050 2>/dev/null)" ] && \
+   [ -z "$(bounded 40 tor-resolve deb.debian.org 127.0.0.1:9050 2>/dev/null)" ]; then
+    say '      FAIL: Tor did not resolve deb.debian.org for a SOCKS client'
     t3_ok=0
 fi
 if [ "$t3_ok" -eq 1 ]; then
-    say '      PASS: 9.9.9.9 died in the output chain; Tor DNSPort and getent both resolve'
+    say '      PASS: 9.9.9.9 died in the output chain; no DNSPort; getent resolves nothing; Tor resolves over SOCKS'
 fi
 [ "$t3_ok" -eq 1 ] || fail
 
-# [4/7] LIVE RULESET == THE SHIPPED FILE ON DISK: nft renders /etc/nftables.conf (the
+# [4/9] LIVE RULESET == THE SHIPPED FILE ON DISK: nft renders /etc/nftables.conf (the
 # live shipped baseline itself, in a throwaway netns) and the counter-stripped renders
 # are diffed — a semantic comparison with nothing pushed from the host.
 # Structural asserts: skuid matches debian-tor's uid, forward = drop + single reject,
 # desktop input port-scoped, stray-DNS redirect, NOTHING on :22 and no sshd ships.
-say '[4/7] live nftables ruleset matches the on-disk /etc/nftables.conf'
+say '[4/9] live nftables ruleset matches the on-disk /etc/nftables.conf'
 t4_ok=1
 if [ ! -f "$LIVE_CONF" ]; then
     say "      FAIL: $LIVE_CONF not found — the shipped ruleset file is missing"
@@ -210,7 +220,12 @@ if nft list ruleset | grep -q 'iifname "ombra-intnet" ip saddr 10.55.10.0/24 cou
 fi
 if ! nft list ruleset | grep -q 'iifname "ombra-intnet".*udp dport 53.*redirect to :53'; then
     say '      FAIL: stray-DNS redirect (foreign UDP/53 -> dnsmasq) missing from live ruleset'
-    evid 'without it, a hardcoded-resolver app dies at the forward reject instead of resolving via Tor'
+    evid 'without it, a hardcoded-resolver app waits for a timeout instead of getting an immediate local answer'
+    t4_ok=0
+fi
+if nft list ruleset | grep -q 'redirect to :9040' || nft list ruleset | grep -q 'dport 9040'; then
+    say '      FAIL: a transparent-proxy rule (port 9040) is in the live ruleset'
+    evid 'the desktop reaches Tor through its SOCKS ports only; nothing is redirected into Tor'
     t4_ok=0
 fi
 if [ "$t4_ok" -eq 1 ]; then
@@ -220,23 +235,21 @@ fi
 [ "$t4_ok" -eq 1 ] || fail
 rm -f $WORK/leak4-live.nft $WORK/leak4-file.nft $WORK/leak4-live.norm $WORK/leak4-file.norm $WORK/leak4.diff $WORK/leak4-file.err
 
-# [5/7] NO UNEXPECTED LISTENERS: whitelist exactly the set the design admits
+# [5/9] NO UNEXPECTED LISTENERS: whitelist exactly the set the design admits
 # (dhclient on the upstream NIC — matched by interface).
 # No sshd: :22 is NOT whitelisted. IPv6 off: v6-family binds are NOT whitelisted.
-say '[5/7] listening sockets match the design whitelist (ss -ltnu)'
+say '[5/9] listening sockets match the design whitelist (ss -ltnu)'
 t5_ok=1
 is_allowed() {
     case "$1 $2" in
-        "tcp 10.55.10.1:53")               return 0 ;;  # dnsmasq DNS for the desktop
-        "udp 10.55.10.1:53")               return 0 ;;  # dnsmasq DNS for the desktop
+        "tcp 10.55.10.1:53")               return 0 ;;  # dnsmasq, local answers only
+        "udp 10.55.10.1:53")               return 0 ;;  # dnsmasq, local answers only
         "udp "*"%ombra-upstream:68")       return 0 ;;  # dhclient on the upstream NIC (any host subnet)
         "tcp 10.55.10.1:9050")             return 0 ;;  # tor SocksPort (desktop apps)
         "tcp 10.55.10.1:9150")             return 0 ;;  # tor SocksPort (desktop Tor Browser)
-        "tcp 10.55.10.1:9040")             return 0 ;;  # tor TransPort (transparent proxy)
         "tcp 10.55.10.1:9052")             return 0 ;;  # ombra-torctl-filter (read-only control)
         "tcp 127.0.0.1:9050")              return 0 ;;  # tor SocksPort (local harness)
         "tcp 127.0.0.1:9051")              return 0 ;;  # tor ControlPort (loopback; the filter's upstream)
-        "udp 127.0.0.1:5353")              return 0 ;;  # tor DNSPort (dnsmasq upstream)
         *)                                 return 1 ;;
     esac
 }
@@ -260,8 +273,8 @@ evid "sockets seen: $(printf '%s' "$ACTUAL" | tr '\n' '; ')"
 [ "$t5_ok" -eq 1 ] || fail
 rm -f $WORK/leak5.unexpected
 
-# [6/7] IPv6 ABSENT: ipv6.disable=1 removes the stack; the sysctl pins are the fallback layer.
-say '[6/7] IPv6 stack absent (ipv6.disable=1) or disable_ipv6=1 on all + every interface'
+# [6/9] IPv6 ABSENT: ipv6.disable=1 removes the stack; the sysctl pins are the fallback layer.
+say '[6/9] IPv6 stack absent (ipv6.disable=1) or disable_ipv6=1 on all + every interface'
 t6_ok=1
 GLOBAL6=$(ip -o -6 addr show scope global 2>/dev/null)
 if [ -n "$GLOBAL6" ]; then
@@ -292,9 +305,9 @@ if [ "$t6_ok" -eq 1 ]; then
 fi
 [ "$t6_ok" -eq 1 ] || fail
 
-# [7/7] CONTROL-PORT FILTER IS ISOLATED: it runs as ombra-torctl (not debian-tor, not root),
+# [7/9] CONTROL-PORT FILTER IS ISOLATED: it runs as ombra-torctl (not debian-tor, not root),
 # that uid gets no upstream egress, and the raw Tor cookie is unreadable to ombra.
-say '[7/7] ombra-torctl-filter runs as ombra-torctl; no egress for it; cookie closed to ombra'
+say '[7/9] ombra-torctl-filter runs as ombra-torctl; no egress for it; cookie closed to ombra'
 t7_ok=1
 FPID=$(systemctl show -p MainPID --value ombra-torctl-filter.service 2>/dev/null)
 FUSER=''
@@ -304,7 +317,7 @@ if [ "$FUSER" != "ombra-torctl" ]; then
     evid "running as: ${FUSER:-not running}"
     t7_ok=0
 fi
-as_user ombra-torctl 'curl -q --connect-timeout 8 -sS -o /dev/null https://check.torproject.org/' >/dev/null 2>&1
+as_user ombra-torctl "curl -q --connect-timeout 8 -sS -o /dev/null --resolve check.torproject.org:443:$PUBLIC_IP https://check.torproject.org/" >/dev/null 2>&1
 rc7=$?
 if [ "$rc7" -ne 7 ]; then
     say '      FAIL: ombra-torctl egress was not refused (curl exit not 7)'
@@ -319,6 +332,103 @@ if [ "$t7_ok" -eq 1 ]; then
     say '      PASS: filter uid isolated; its egress refused (exit 7); cookie closed to ombra'
 fi
 [ "$t7_ok" -eq 1 ] || fail
+# [8/9] TOR'S DESKTOP-FACING SURFACE IS SOCKS ONLY: no automap, no DNSPort, no TransPort in the configuration Tor
+# actually runs with, and the behaviour to match — an onion name is never mapped to an address. This is the code path
+# of the 2026 gateway escape (TROVE-2026-036: flood the automap pool, then corrupt the freed entry).
+say '[8/9] Tor surface: no automap, DNSPort or TransPort; an onion name is not mapped to an address'
+t8_ok=1
+CONF=$(tor --defaults-torrc /usr/share/tor/tor-service-defaults-torrc -f /etc/tor/torrc --dump-config short 2>/dev/null)
+if [ -z "$CONF" ]; then
+    say '      FAIL: could not read the configuration Tor runs with (tor --dump-config)'
+    t8_ok=0
+fi
+for opt in AutomapHostsOnResolve VirtualAddrNetworkIPv4 VirtualAddrNetworkIPv6 TransPort DNSPort NATDPort HTTPTunnelPort; do
+    if printf '%s\n' "$CONF" | grep -qi "^$opt "; then
+        say "      FAIL: $opt is set in Tor's configuration"
+        evid "$(printf '%s\n' "$CONF" | grep -i "^$opt " | head -1)"
+        t8_ok=0
+    fi
+done
+if ! printf '%s\n' "$CONF" | grep -qi '^NoExec 1'; then
+    say '      FAIL: NoExec 1 is not set'
+    t8_ok=0
+fi
+unset CONF
+MAPPED=$(bounded 25 tor-resolve 2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion 127.0.0.1:9050 2>/dev/null)
+if [ -n "$MAPPED" ]; then
+    say '      FAIL: Tor answered a resolve request for an onion name with an address — automap is live'
+    t8_ok=0
+fi
+unset MAPPED
+if [ "$t8_ok" -eq 1 ]; then
+    say '      PASS: SOCKS is the only way in; onion names are not mapped to addresses'
+fi
+[ "$t8_ok" -eq 1 ] || fail
+
+# [9/9] ASSUME TOR IS HIJACKED: run as the Tor uid, the one uid allowed out, and try what injected code would try to
+# find the public address or the local network. UDP must be refused; so must the upstream router, the rest of the local
+# network and the link-local metadata address. Then the process itself: system-call filter, no-new-privileges, the
+# AppArmor profile, and the crash tripwire wired into the unit.
+say '[9/9] hijacked-Tor probe: Tor uid cannot use UDP or reach local addresses; Tor is confined; crash tripwire armed'
+t9_ok=1
+as_tor() { setpriv --reuid=debian-tor --regid=debian-tor --clear-groups "$@"; }
+UDPOUT=$(as_tor timeout 9 bash -c 'exec 3<>/dev/udp/9.9.9.9/53 || exit 1
+    printf "\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03deb\x06debian\x03org\x00\x00\x01\x00\x01" >&3
+    timeout 5 head -c 4 <&3 | od -An -tu1' 2>/dev/null)
+if [ -n "$UDPOUT" ]; then
+    say '      FAIL: the Tor uid got a UDP answer from a public resolver (UDP must not leave)'
+    t9_ok=0
+fi
+ROUTER=$(ip -4 route show default 2>/dev/null | awk '{print $3; exit}')
+# the common home-router block, spelled in two parts: the public-hygiene check forbids a literal address from it
+LAN_C=192.168
+for target in ${ROUTER:+$ROUTER:80} ${ROUTER:+$ROUTER:5351} "$LAN_C.1.1:80" 10.0.0.1:80 172.16.0.1:80 169.254.169.254:80 100.64.0.1:80; do
+    as_tor curl -q --connect-timeout 6 -sS -o /dev/null "http://$target/" >/dev/null 2>&1
+    rc9=$?
+    if [ "$rc9" -ne 7 ]; then
+        say "      FAIL: the Tor uid was not refused at a local address (curl exit $rc9, want 7)"
+        evid 'target class: upstream router, private range, link-local or carrier NAT (address not recorded)'
+        t9_ok=0
+    fi
+done
+unset ROUTER LAN_C
+TPID=$(systemctl show -p MainPID --value tor@default 2>/dev/null)
+if [ -z "$TPID" ] || [ "$TPID" = 0 ] || [ ! -r "/proc/$TPID/status" ]; then
+    say '      FAIL: no running Tor process to inspect'
+    t9_ok=0
+else
+    if [ "$(awk '$1=="Seccomp:"{print $2}' "/proc/$TPID/status")" != 2 ]; then
+        say '      FAIL: Tor runs without a system-call filter'
+        t9_ok=0
+    fi
+    if [ "$(awk '$1=="NoNewPrivs:"{print $2}' "/proc/$TPID/status")" != 1 ]; then
+        say '      FAIL: Tor runs without no-new-privileges'
+        t9_ok=0
+    fi
+    AA=$(cat "/proc/$TPID/attr/current" 2>/dev/null)
+    if [ "$AA" != 'system_tor (enforce)' ]; then
+        say '      FAIL: Tor is not confined by its AppArmor profile in enforce mode'
+        evid "label: ${AA:-none}"
+        t9_ok=0
+    fi
+    unset AA
+fi
+UNIT=$(systemctl show tor@default -p Restart -p RestartPreventExitStatus -p ExecCondition -p ExecStopPost -p MemoryDenyWriteExecute 2>/dev/null)
+for want in 'Restart=on-failure' 'MemoryDenyWriteExecute=yes' 'ombra-tor-tripwire ; argv[]=/usr/local/sbin/ombra-tor-tripwire gate' 'ombra-tor-tripwire ; argv[]=/usr/local/sbin/ombra-tor-tripwire record'; do
+    if ! printf '%s\n' "$UNIT" | grep -qF "$want"; then
+        say "      FAIL: tor@default lacks: $want"
+        t9_ok=0
+    fi
+done
+if ! printf '%s\n' "$UNIT" | grep -q '^RestartPreventExitStatus=.*SYS'; then
+    say '      FAIL: a system-call filter kill (SIGSYS) would be restarted'
+    t9_ok=0
+fi
+unset UNIT TPID
+if [ "$t9_ok" -eq 1 ]; then
+    say '      PASS: UDP and every local address refused for the Tor uid; filter, no-new-privileges and profile in force; tripwire armed'
+fi
+[ "$t9_ok" -eq 1 ] || fail
 rm -rf "$WORK/leak"*
 
 say "SUMMARY: passed=$((TOTAL - FAILS))/$TOTAL fail=$FAILS"

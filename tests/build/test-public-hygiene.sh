@@ -52,7 +52,9 @@ PATTERNS='hac''cer|/Us''ers/|192\.168\.[0-9]|co''dy@'
 HITS=0
 for f in "${FILES[@]}"; do
   [ -f "$REPO/$f" ] || continue
-  found="$(grep -InEi "$PATTERNS" -- "$REPO/$f" 2>/dev/null)" || true
+  # the whole private block in CIDR form (192.168.0.0/16) names no machine: firewall rules and docs need it. It is
+  # blanked before matching, so a real address on the same line is still caught
+  found="$(sed 's|192\.168\.0\.0/16|<rfc1918-block>|g' -- "$REPO/$f" 2>/dev/null | grep -InEi "$PATTERNS" 2>/dev/null)" || true
   [ -z "$found" ] && continue
   while IFS= read -r line; do
     bad "leak: $f:$line"

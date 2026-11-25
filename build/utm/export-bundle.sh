@@ -36,7 +36,6 @@ usage: bash build/utm/export-bundle.sh <desktop|gateway> [vmx-path] [--allow-tes
 
   env: OMBRA_VERSION (default $VERSION), OMBRA_RELEASE_DIR (default build/releases)
 
-  the single edition ships only as its installer ISO: build/release-single-iso.sh
 EOF2
 }
 
@@ -182,8 +181,8 @@ zip_clean() { # <parent dir> <entry> <out.zip>
 }
 zip_clean "$STAGE" "ombra-$TARGET.utm" "$ZIP" || fatal "zip could not create the archive"
 bash "$HERE/verify-bundle.sh" "$TARGET" "$ZIP" || { rm -f "$ZIP"; fatal "the archive failed verification and was removed"; }
-# one SHA256SUMS.txt for every archive present, Fusion and UTM alike (the Fusion exporter does the same), and the single ISO
-( cd "$OUT_DIR" && : > SHA256SUMS.txt.new && for f in ombra-*.vmwarevm.zip ombra-*.utm.zip ombra-*.iso; do
+# one SHA256SUMS.txt for every archive present, Fusion and UTM alike (the Fusion exporter does the same)
+( cd "$OUT_DIR" && : > SHA256SUMS.txt.new && for f in ombra-*.vmwarevm.zip ombra-*.utm.zip; do
     [ -f "$f" ] || continue
     printf '%12s bytes  %s\n' "$(stat -f %z "$f")" "$f"
     shasum -a 256 "$f" >> SHA256SUMS.txt.new

@@ -1,0 +1,46 @@
+#!/bin/sh
+# ombra-tor-freshness — is the installed Tor the newest one Debian's security archive offers?
+# Fetches the signed package list of trixie-security through this gateway's own Tor (apt checks Debian's signature as
+# always), compares its tor version with the installed one and writes one word to /run/ombra/tor-update:
+#   current     the installed Tor is the newest
+#   available   Debian has a newer Tor: sudo ombra-update security --no-rollback (Persistent mode)
+# No answer leaves the file as it was. It installs nothing and writes nothing outside /run: it works in Amnesic mode.
+# The control-port filter reports the word to the desktop.
+# Exit: 0 answered, 75 could not reach Debian through Tor (the unit retries), 1 anything else.
+set -u
+SOCKS=127.0.0.1:9050
+SRC=/etc/ombra/tor-freshness.list
+STATE=/run/ombra/tor-update
+W=/run/ombra-tor-freshness
+log() { echo "ombra-tor-freshness: $*"; }
+
+installed=$(dpkg-query -W -f='${Version}' tor 2>/dev/null) || installed=
+[ -n "$installed" ] || { log "tor is not installed as a package"; exit 1; }
+[ -r "$SRC" ] || { log "$SRC is missing"; exit 1; }
+
+rm -rf "$W"; mkdir -p "$W/lists/partial" "$W/cache/archives/partial" /run/ombra || exit 1
+trap 'rm -rf "$W"' EXIT
+# its own source list and its own list directory: the system's apt state is neither read nor written
+APT="-o Dir::Etc::sourcelist=$SRC -o Dir::Etc::sourceparts=- -o Dir::State::lists=$W/lists -o Dir::Cache=$W/cache
+     -o Acquire::http::Proxy=socks5h://$SOCKS -o Acquire::https::Proxy=socks5h://$SOCKS -o Acquire::Retries=2
+     -o Acquire::http::Timeout=60 -o Acquire::Languages=none -o APT::Get::List-Cleanup=0 -o Debug::NoLocking=1"
+# shellcheck disable=SC2086
+if ! apt-get $APT update --error-on=any >"$W/update.log" 2>&1; then
+    log "could not fetch Debian's security package list through Tor"
+    exit 75
+fi
+# shellcheck disable=SC2086
+cand=
+for v in $(apt-cache $APT show tor 2>/dev/null | awk '$1=="Version:"{print $2}'); do
+    if [ -z "$cand" ] || dpkg --compare-versions "$v" gt "$cand"; then cand=$v; fi
+done
+[ -n "$cand" ] || { log "Debian's security list names no tor package"; echo current > "$STATE"; chmod 0644 "$STATE"; exit 0; }
+if dpkg --compare-versions "$cand" gt "$installed"; then
+    echo available > "$STATE"
+    log "a newer Tor is available from Debian ($cand; installed $installed)"
+else
+    echo current > "$STATE"
+    log "Tor is current ($installed)"
+fi
+chmod 0644 "$STATE"
+exit 0

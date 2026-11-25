@@ -11,22 +11,21 @@ ClientOnly 1
 DirCache 0
 
 # ---- ports for the desktop ----
+# SOCKS is the desktop's only way into Tor. There is no TransPort, no DNSPort and no automap: each was a second
+# way for the desktop to reach Tor's resolver and address-map code (TROVE-2026-036 lived there), and no shipped
+# application used them, because the desktop firewall only ever allowed connections to this gateway.
 # general SOCKS for desktop apps: a separate circuit per destination address and port
 SocksPort 10.55.10.1:9050 IsolateDestAddr IsolateDestPort
 # Tor Browser only: it isolates per site itself (SOCKS credentials per first party), so per-destination
 # isolation here would split one page across a circuit per third-party host. Flags as in its own torrc-defaults
 SocksPort 10.55.10.1:9150 ExtendedErrors KeepAliveIsolateSOCKSAuth
-# nftables prerouting REDIRECT lands here
-TransPort 10.55.10.1:9040
-# dnsmasq (desktop :53) forwards here; loopback-only
-DNSPort 127.0.0.1:5353
+# only the private link and this machine may speak SOCKS (the firewall says the same)
+SocksPolicy accept 10.55.10.0/24
+SocksPolicy accept 127.0.0.1
+SocksPolicy reject *
 
-# ---- .onion over DNS (transparent-proxy clients) ----
-# automapped synthetic addresses ride the REDIRECT to TransPort like
-# any other TCP. Tor enforces a /16 minimum here (a /24 is rejected at
-# config parse); 10.66/16 cannot collide with the intnet.
-AutomapHostsOnResolve 1
-VirtualAddrNetworkIPv4 10.66.0.0/16
+# Tor never starts another program (no pluggable transports ship); the service sandbox says the same
+NoExec 1
 
 # gateway-local SOCKS for the leak-test harness
 SocksPort 127.0.0.1:9050

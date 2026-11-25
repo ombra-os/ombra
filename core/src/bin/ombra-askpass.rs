@@ -16,7 +16,7 @@ use ratatui::{Frame, Terminal};
 use ombra_boot::askpass::{self, AskRequest};
 use ombra_boot::fb::{self, UiBackend};
 use ombra_boot::input::{
-    byte_to_key, wipe_keys, FieldEvent, KeyReader, SecretBuf, SecretField, Severity,
+    wipe_keys, FieldEvent, KeyReader, SecretBuf, SecretField, Severity,
 };
 use ombra_boot::keyscript;
 use ombra_boot::term;
@@ -51,7 +51,7 @@ impl Agent {
     fn new() -> Self {
         Agent {
             mode: Mode::Splash,
-            field: SecretField::new("passphrase"),
+            field: SecretField::for_unlock("passphrase"),
             pending: None,
             build_tried: None,
             build_since: Instant::now(),
@@ -103,6 +103,7 @@ fn test_build_key(device: &str) -> Option<i32> {
 }
 
 fn main() -> ExitCode {
+    ombra_boot::no_core_dumps();
     let args: Vec<String> = std::env::args().collect();
     let keyscript_mode =
         keyscript::is_keyscript_invocation(&args, std::env::var_os("CRYPTTAB_NAME").is_some());
@@ -317,7 +318,7 @@ fn on_key(agent: &mut Agent, k: KeyEvent) {
             agent.retry = None;
             agent.feedback = None;
         }
-        FieldEvent::TooShort => agent.feedback = Some(keyscript::TOO_SHORT_MESSAGE),
+        FieldEvent::TooShort => agent.feedback = Some(keyscript::EMPTY_MESSAGE),
         FieldEvent::Edited => agent.feedback = None,
         FieldEvent::Ignored => {}
     }
@@ -419,7 +420,9 @@ struct KeyscriptTty {
 impl KeyscriptTty {
     /// Fixed-viewport terminal; raw mode comes from TtyHandle.
     fn new() -> Option<Self> {
-        let tty = term::TtyHandle::open()?;
+        let mut tty = term::TtyHandle::open()?;
+        // between two prompts cryptsetup works for seconds: typed-ahead characters must not show
+        tty.keep_echo_off_on_exit();
         let fd = tty.raw_fd();
         let keys = KeyReader::from_tty(&tty);
         let (backend, (rows, cols)) = fb::open_backend(tty, "ombra-askpass").ok()?;
@@ -481,7 +484,8 @@ fn keyscript_main(args: &[String]) -> Result<()> {
 
     // terminal setup can fail on initramfs console topologies: the headless UI still answers the keyscript contract
     let tui = KeyscriptTty::new();
-    let mut out = io::stdout().lock();
+    // unbuffered: the key goes straight to cryptsetup's pipe, with no copy left in a stdout buffer
+    let mut out = RawStdout;
     match tui {
         Some(ui) => keyscript::run(
             &mut out,
@@ -504,11 +508,30 @@ fn keyscript_main(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// File descriptor 1, written with write(2) directly.
+struct RawStdout;
+
+impl Write for RawStdout {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        // SAFETY: `buf` is valid for `buf.len()` bytes for the duration of the call; fd 1 is this process's stdout.
+        let n = unsafe { libc::write(1, buf.as_ptr().cast(), buf.len()) };
+        if n < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(n as usize)
+        }
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Plain-text unlock fallback when no terminal backend can be built; stdin is cryptroot's pipe, never user input.
 struct HeadlessUi {
     tty: Option<std::fs::File>,
     /// Termios as found, restored on Drop.
     saved_termios: Option<libc::termios>,
+    esc: ombra_boot::input::EscState,
 }
 
 impl HeadlessUi {
@@ -517,7 +540,7 @@ impl HeadlessUi {
         let mut tty = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
-            .custom_flags(0o400000) // O_NOCTTY on Linux
+            .custom_flags(libc::O_NOCTTY)
             .open("/dev/tty1")
             .or_else(|_| {
                 std::fs::OpenOptions::new()
@@ -544,14 +567,21 @@ impl HeadlessUi {
         if saved_termios.is_none() {
             tty = None;
         }
-        HeadlessUi { tty, saved_termios }
+        HeadlessUi {
+            tty,
+            saved_termios,
+            esc: Default::default(),
+        }
     }
 }
 
 impl Drop for HeadlessUi {
     fn drop(&mut self) {
-        if let (Some(f), Some(t)) = (self.tty.as_ref(), self.saved_termios.take()) {
+        if let (Some(f), Some(mut t)) = (self.tty.as_ref(), self.saved_termios.take()) {
             use std::os::unix::io::AsRawFd as _;
+            // echo stays off: the next keyscript run, or the system once it is up, sets the terminal again
+            t.c_lflag &= !(libc::ECHO | libc::ECHONL);
+            // SAFETY: `t` is a valid termios and the fd is open.
             unsafe {
                 libc::tcsetattr(f.as_raw_fd(), libc::TCSANOW, &t);
             }
@@ -580,7 +610,8 @@ impl keyscript::KeyscriptUi for HeadlessUi {
             std::thread::sleep(Duration::from_millis(200));
             return Ok(None);
         }
-        Ok(byte_to_key(b[0]))
+        // arrow and function keys must not leave their trailing letters in the passphrase
+        Ok(self.esc.feed(b[0]))
     }
     fn tick_wait(&mut self, d: Duration) {
         std::thread::sleep(d);

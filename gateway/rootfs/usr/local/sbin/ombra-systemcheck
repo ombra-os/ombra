@@ -1,7 +1,7 @@
 #!/bin/sh
 #
 # ombra-systemcheck — the gateway's health report (tor bootstrapped,
-# firewall == shipped file, DNS only through Tor, egress closed, clock
+# firewall == shipped file, names only through Tor's SOCKS port, Tor confined and current, egress closed, clock
 # sane, no stray listeners or failed units).
 # Modes: [--boot] (wait for tor bootstrap) [--summary] (silent;
 # machine-readable FAILED=/SKIPPED= lines for ombra-splash).
@@ -108,7 +108,7 @@ fi
 if [ "$ROOTED" -ne 1 ]; then
     skip "Egress" "requires root - run: sudo ombra-systemcheck"
 else
-    EG_RC=$(setpriv --reuid=ombra --regid=ombra --init-groups /bin/sh -c 'curl -q --connect-timeout 8 -sS -o /dev/null https://check.torproject.org/ 2>/dev/null; echo x$?' 2>&1)
+    EG_RC=$(setpriv --reuid=ombra --regid=ombra --init-groups /bin/sh -c 'curl -q --connect-timeout 8 -sS -o /dev/null --resolve check.torproject.org:443:9.9.9.9 https://check.torproject.org/ 2>/dev/null; echo x$?' 2>&1)
     case "$EG_RC" in
         x7)  pass "Egress" "non-tor processes refused (fail-closed holds)" ;;
         x0)  fail "Egress" "NOT refused - firewall off (curl connected)" ;;
@@ -117,31 +117,61 @@ else
     esac
 fi
 
-# 4. DNS: dnsmasq runs, and Tor's resolver answers (SOCKS RESOLVE for
-#    names; the DNSPort automap for .onion). dnsmasq binds 10.55.10.1 only
-#    (except-interface=lo: no 127.0.0.1 listener); resolv.conf points the
-#    gateway there, which ombra-leak-probe [3/7] covers via getent.
-dns_query() {
-    timeout $(($3 + 3)) bash -c 'exec 3<>"/dev/udp/$0/$1" || exit 1
-        printf "\x12\x36\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00$3\x00\x00\x01\x00\x01" >&3
-        timeout "$2" dd bs=512 count=1 <&3 2>/dev/null | od -An -tu1' "$1" "$2" "$3" "$4" 2>/dev/null
-}
+# 4. Names: Tor resolves them over SOCKS, and only over SOCKS. dnsmasq answers the desktop from its own file and
+#    forwards nothing; Tor has no DNSPort, no TransPort and no automap (the listener check below fails on either port).
 tr_resolve() { timeout 30 tor-resolve "$1" 127.0.0.1:9050 2>/dev/null; }
 A=$(tr_resolve deb.debian.org)
 [ -z "$A" ] && { sleep 5; A=$(tr_resolve deb.debian.org); }
 if [ -n "$A" ] && systemctl is-active --quiet dnsmasq 2>/dev/null; then
-    pass "DNS" "dnsmasq up; Tor resolver answers"
+    pass "Names" "Tor resolves over SOCKS; dnsmasq up"
 else
-    fail "DNS" "dnsmasq down or Tor resolver not answering"
+    fail "Names" "dnsmasq down or Tor resolver not answering"
 fi
 unset A
-ONION=$(dns_query 127.0.0.1 5353 15 '\x382gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid\x05onion')
-ONION=$(printf '%s' "$ONION" | tr -s ' \n' '\n\n' | tail -4 | tr '\n' '.' | sed 's/\.$//')
-case "$ONION" in
-    10.66.*) pass "Onion DNS" "automap resolves into the synthetic range" ;;
-    *)       fail "Onion DNS" "automap broken" ;;
+# an onion name must NOT turn into an address: automap is the code the 2026 gateway escape went through
+if [ -n "$(timeout 20 tor-resolve 2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion 127.0.0.1:9050 2>/dev/null)" ]; then
+    fail "Automap" "Tor mapped an onion name to an address - automap is on"
+else
+    pass "Automap" "off (onion names are never mapped to addresses)"
+fi
+
+# 4b. the Tor daemon: confined, not crashed, current
+if [ "$ROOTED" -ne 1 ]; then
+    skip "Tor confinement" "requires root - run: sudo ombra-systemcheck"
+else
+    TPID=$(systemctl show -p MainPID --value tor@default 2>/dev/null)
+    if [ -n "$TPID" ] && [ "$TPID" != 0 ] && [ -r "/proc/$TPID/status" ]; then
+        SC=$(awk '$1=="Seccomp:"{print $2}' "/proc/$TPID/status")
+        NNP=$(awk '$1=="NoNewPrivs:"{print $2}' "/proc/$TPID/status")
+        AA=$(cat "/proc/$TPID/attr/current" 2>/dev/null)
+        if [ "$SC" != 2 ] || [ "$NNP" != 1 ]; then
+            fail "Tor confinement" "system-call filter or no-new-privileges is not in force"
+        elif [ "$AA" != "system_tor (enforce)" ]; then
+            fail "Tor confinement" "AppArmor profile not enforcing (${AA:-none})"
+        else
+            pass "Tor confinement" "system-call filter on${AA:+, AppArmor $AA}"
+        fi
+    else
+        fail "Tor confinement" "no Tor process to inspect"
+    fi
+    unset TPID SC NNP AA
+fi
+CRASHES=$(cat /run/ombra/tor-crashes 2>/dev/null); case "$CRASHES" in ''|*[!0-9]*) CRASHES=0 ;; esac
+if [ -e /run/ombra/tor-killed ]; then
+    fail "Tor crashes" "Tor was stopped by its system-call filter - possible attack; update, then restart the gateway"
+elif [ "$CRASHES" -ge 2 ]; then
+    fail "Tor crashes" "Tor died unexpectedly $CRASHES times this boot and stays down - update, then restart the gateway"
+elif [ "$CRASHES" -eq 1 ]; then
+    warn "Tor crashes" "Tor died unexpectedly once this boot and was restarted"
+else
+    pass "Tor crashes" "none this boot"
+fi
+unset CRASHES
+case "$(head -n1 /run/ombra/tor-update 2>/dev/null)" in
+    current)   pass "Tor version" "newest from Debian's security archive ($(dpkg-query -W -f='${Version}' tor 2>/dev/null))" ;;
+    available) warn "Tor version" "a newer Tor exists - run: sudo ombra-update security --no-rollback (Persistent mode)" ;;
+    *)         warn "Tor version" "not checked yet (runs a few minutes after boot, then daily)" ;;
 esac
-unset ONION
 
 # 5. SOCKS path reaches the real Tor network; one retry (a fresh
 #    circuit can blow the window once). The answer body is checked and
@@ -189,7 +219,7 @@ fi
 # 8. listeners must match the design whitelist (no sshd ships; IPv6 is
 #    off, so any v6-family bind is itself unexpected)
 BAD=$(ss -ltnu 2>/dev/null | awk 'NR>1 {print $1, $5}' | grep -vE \
-  '^(tcp 10\.55\.10\.1:53|udp 10\.55\.10\.1:53|udp [0-9.]+%ombra-upstream:68|tcp 10\.55\.10\.1:9050|tcp 10\.55\.10\.1:9150|tcp 10\.55\.10\.1:9040|tcp 10\.55\.10\.1:9052|tcp 127\.0\.0\.1:9050|tcp 127\.0\.0\.1:9051|udp 127\.0\.0\.1:5353)$' || true)
+  '^(tcp 10\.55\.10\.1:53|udp 10\.55\.10\.1:53|udp [0-9.]+%ombra-upstream:68|tcp 10\.55\.10\.1:9050|tcp 10\.55\.10\.1:9150|tcp 10\.55\.10\.1:9052|tcp 127\.0\.0\.1:9050|tcp 127\.0\.0\.1:9051)$' || true)
 if [ -z "$BAD" ]; then
     pass "Listeners" "match the design whitelist"
 else

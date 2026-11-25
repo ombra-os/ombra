@@ -1,8 +1,0 @@
-Template: ombra/vm-too-small
-Type: error
-Description: This virtual machine cannot run Ombra
- ${REASON}
- .
- Ombra needs a virtual disk of at least 24 GB (30 GB recommended) and at least 3 GB of memory (6 GB recommended). Nothing has been written to the disk.
- .
- Power off this virtual machine, change its disk or memory in the virtualization app, and start the installer again.

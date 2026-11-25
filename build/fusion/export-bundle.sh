@@ -33,7 +33,6 @@ usage: bash build/fusion/export-bundle.sh <desktop|gateway> [vmx-path]
 
   env: OMBRA_VERSION (default $VERSION), OMBRA_RELEASE_DIR (default build/releases)
 
-  the single edition ships only as its installer ISO: build/release-single-iso.sh
 EOF2
 }
 
@@ -143,8 +142,7 @@ bash "$HERE/verify-bundle.sh" "$ARCHIVE" || fatal "the archive failed verificati
 
 cd "$OUT_DIR"
 : > SHA256SUMS.txt.new
-# the single edition's installer ISO (build/release-single-iso.sh) keeps its line too
-for f in ombra-*.vmwarevm.zip ombra-*.utm.zip ombra-*.iso; do
+for f in ombra-*.vmwarevm.zip ombra-*.utm.zip; do
   [ -f "$f" ] || continue
   printf '%12s bytes  %s\n' "$(stat -f %z "$f")" "$f"
   shasum -a 256 "$f" >> SHA256SUMS.txt.new

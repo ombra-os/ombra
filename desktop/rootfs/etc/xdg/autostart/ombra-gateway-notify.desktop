@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Ombra gateway notice
+Exec=/usr/local/bin/ombra-gateway-notify
+NoDisplay=true
+X-KDE-autostart-after=panel

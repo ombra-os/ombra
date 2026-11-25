@@ -86,6 +86,13 @@ retouch — the same bytes at 512px):
 | `usr/share/sddm/faces/ombra.face.icon` | the SDDM greeter's avatar for the login screen. sddm looks up `<username>.face.icon` in its `FacesDir` (`/usr/share/sddm/faces`); the username is the fixed `ombra` (core/src/welcome.rs `USER`), so the system-wide copy covers every boot without touching a home directory |
 | `etc/skel/.face.icon` | the same ring as the session user's own face, so Plasma's user model, the lock screen and About Me show the emblem instead of a generic silhouette — and so it holds even if the account is ever renamed (sddm falls back to `$HOME/.face.icon`) |
 
+`usr/local/share/icons/hicolor/scalable/apps/ombra-launcher.svg` is the
+dock's application-launcher button (the look-and-feel layout sets
+Kickoff's `icon=ombra-launcher`): the same mark redrawn as plain SVG
+paths from `ombra-logo.svg`'s geometry (ring proportions and slash angle
+kept, slash and cuts widened to stay visible at 22-48 px), light
+`#f4f3ef` on transparent. First-party, nothing fetched.
+
 ## First-party wallpapers
 
 Created for Ombra and licensed GPL-3.0-or-later, the same terms as the
@@ -107,8 +114,8 @@ The session, lock-screen and login wallpapers:
 
 | Shipped as | What reads it | sha256 | Origin |
 |---|---|---|---|
-| `usr/share/backgrounds/ombra/ombra-ink-4k.jpg` | Session wallpaper (look-and-feel `org.kde.plasma.desktop-layout.js`) and lock screen (`etc/skel/.config/kscreenlockerrc`) | `87c9ed4f95d6f8d6d54dbfe77a27ca7155ea79fe9a2a82a682483d358ada4292` | first-party (owner to confirm) |
-| `usr/share/sddm/themes/Colloid-dark/background.jpg` | SDDM login screen (`theme.conf`) | `7748d6f5f87b5bbb8f50959b697b7dd66c1ff93416888ea6b925ce17c66b11c6` | first-party (owner to confirm) |
+| `usr/share/backgrounds/ombra/ombra-ink-4k.jpg` | Session wallpaper (look-and-feel `org.kde.plasma.desktop-layout.js`) and lock screen (`etc/skel/.config/kscreenlockerrc`) | `87c9ed4f95d6f8d6d54dbfe77a27ca7155ea79fe9a2a82a682483d358ada4292` | first-party |
+| `usr/share/sddm/themes/Colloid-dark/background.jpg` | SDDM login screen (`theme.conf`) | `7748d6f5f87b5bbb8f50959b697b7dd66c1ff93416888ea6b925ce17c66b11c6` | first-party |
 
 ## Tor Browser icon
 

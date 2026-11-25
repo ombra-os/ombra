@@ -44,7 +44,7 @@ grep -q 'ActionInvoked' "$N" && grep -q 'ombra-update-gui' "$N" && grep -q '"def
 grep -q 'ombra-update-notify.pid' "$N" && grep -q 'kill -0' "$N" && ok "only one notice watcher runs per session" || bad "a second watcher can start and double the notice"
 grep -q '"$prev"' "$N" && ok "a repeated notice replaces the old one instead of stacking" || bad "repeats stack new notices"
 for f in scripts/update/sign-sums.sh scripts/update/verify-sums.sh scripts/upload-r2.sh; do bash -n "$REPO/$f" || bad "$f syntax"; done
-# Debian updates are user-started only, and the editions get their own bundles
+# Debian updates are user-started only
 UPD="$REPO/update/rootfs/usr/local/sbin/ombra-update"
 ! grep -rq 'security' "$REPO/update/rootfs/etc/systemd/system" && ok "no unit runs ombra-update security (Debian is only contacted when the user asks)" || bad "a unit runs ombra-update security"
 H="$REPO/update/rootfs/etc/ombra/update-hold"
@@ -53,15 +53,9 @@ H="$REPO/update/rootfs/etc/ombra/update-hold"
 grep -q 'pkexec "$U" security' "$G" && grep -q '"$U" info' "$G" && grep -q 'Check Debian security updates' "$G" && ok "Update Ombra offers Debian security updates and reads the disk layout from ombra-update info" || bad "Update Ombra lacks the security action or info"
 P="$REPO/desktop/rootfs/usr/share/polkit-1/actions/org.ombra.update.policy"
 grep -q 'exec.path">/usr/local/sbin/ombra-update<' "$P" && ! grep -q 'exec.argv' "$P" && ok "the polkit action allows every ombra-update subcommand (no argument pinning)" || bad "the polkit action pins arguments: security may be refused"
-mkdir -p "$T/single/var/lib/ombra" "$T/single/usr/share/ombra"; echo img > "$T/single/var/lib/ombra/gateway.img"
-(cd "$T/single/var/lib/ombra" && shasum -a 256 gateway.img) > "$T/single/usr/share/ombra/gateway.img.sha256"
-SB=$(bash "$REPO/scripts/update/make-bundle.sh" single 9.9 1.1 "$T/single" "$T/out" "$T/k/update-signing.key" 2>/dev/null | head -1)
-[ -f "$SB" ] && tar -xOf "$SB" manifest | grep -qx role=single && ok "make-bundle builds a single-edition bundle" || bad "make-bundle single"
-bash "$REPO/scripts/update/make-bundle.sh" desktop 9.9 1.1 "$T/single" "$T/out2" "$T/k/update-signing.key" >/dev/null 2>&1 && bad "make-bundle put the gateway image in a two-VM desktop bundle" || ok "only single bundles may carry the gateway image"
-echo other > "$T/single/var/lib/ombra/gateway.img"
-bash "$REPO/scripts/update/make-bundle.sh" single 9.9 1.1 "$T/single" "$T/out3" "$T/k/update-signing.key" >/dev/null 2>&1 && bad "make-bundle accepted a gateway image that does not match its checksum" || ok "make-bundle refuses a gateway image that does not match its checksum"
-bash "$REPO/scripts/update/make-index.sh" "$T/k/update-signing.key" "$T/idx2" 30 "single=$SB" "desktop=$B" >/dev/null 2>&1 && grep -q '^single.version=9.9$' "$T/idx2/latest.txt" && ok "make-index accepts role single" || bad "make-index single"
-bash "$REPO/scripts/update/make-index.sh" "$T/k/update-signing.key" "$T/idx3" 30 "desktop=$SB" >/dev/null 2>&1 && bad "make-index listed a single bundle as desktop" || ok "make-index refuses a bundle under another role"
+bash "$REPO/scripts/update/make-bundle.sh" single 9.9 1.1 "$T/payload" "$T/out-s" "$T/k/update-signing.key" >/dev/null 2>&1 && bad "make-bundle accepted the discontinued single role" || ok "make-bundle refuses the discontinued single role"
+bash "$REPO/scripts/update/make-index.sh" "$T/k/update-signing.key" "$T/idx2" 30 "single=$B" >/dev/null 2>&1 && bad "make-index accepted the discontinued single role" || ok "make-index refuses the discontinued single role"
+bash "$REPO/scripts/update/make-index.sh" "$T/k/update-signing.key" "$T/idx3" 30 "gateway=$B" >/dev/null 2>&1 && bad "make-index listed a desktop bundle as gateway" || ok "make-index refuses a bundle under another role"
 for f in "$UPD" "$G" "$N" "$REPO/scripts/update/post-runner.sh"; do sh -n "$f" && { ! command -v dash >/dev/null || dash -n "$f"; } || bad "$f does not parse as POSIX sh"; done
 bash "$REPO/tests/build/test-update-logic.sh" > "$T/logic.out" 2>&1 && ok "the updater logic suite passes (tests/build/test-update-logic.sh)" || { bad "updater logic suite"; grep FAIL "$T/logic.out"; }
 [ "$FAILS" -eq 0 ] && echo "ALL PASS" || { echo "$FAILS FAILED"; exit 1; }

@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/build/test-install-iso.sh — offline test for the installer ISO builder (gateway, desktop, single)
+# tests/build/test-install-iso.sh — offline test for the installer ISO builder (gateway, desktop)
 # (preseed carried verbatim in the initrd's appended cpio segment; unattended grub).
 # Requires: xorriso + the pinned netinst in build/isos/.
 
@@ -32,8 +32,8 @@ stock_initrd() { # extract the stock initrd size
 }
 STOCK=$(stock_initrd)
 
-echo "== build all three targets (gateway, desktop, single) =="
-for t in gateway desktop single; do
+echo "== build both targets (gateway, desktop) =="
+for t in gateway desktop; do
   if bash "$REPO/build/make-install-iso.sh" "$t" > "$TMP/build-$t.log" 2>&1; then
     ok "$t ISO built"
   else
@@ -42,7 +42,7 @@ for t in gateway desktop single; do
 done
 
 echo "== ISO volume id =="
-for t in gateway desktop single; do
+for t in gateway desktop; do
   ISO="$REPO/build/disks/ombra-install-$t.iso"
   got="$(xorriso -indev "$ISO" -pvd_info 2>/dev/null | sed -n 's/^Volume Id *: //p')"
   [ "$got" = "Ombra-$t-arm64" ] \
@@ -51,14 +51,14 @@ for t in gateway desktop single; do
 done
 
 echo "== one ISO, no second-disc/HTTP artifacts =="
-for t in gateway desktop single; do
+for t in gateway desktop; do
   [ -f "$REPO/build/disks/ombra-install-$t.iso" ] && ok "ombra-install-$t.iso" || bad "ombra-install-$t.iso missing"
 done
 [ -e "$REPO/build/disks/preseed-gateway.iso" ] && bad "second-disc artifact preseed-gateway.iso exists" || ok "no second-disc artifacts"
 [ -e "$REPO/build/serve" ] && bad "build/serve (HTTP preseed staging) exists" || ok "no HTTP-preseed artifacts"
 
 echo "== payload segment per target (wrong-payload guard) =="
-for t in gateway desktop single; do
+for t in gateway desktop; do
   ISO="$REPO/build/disks/ombra-install-$t.iso"
   xorriso -osirrox on -indev "$ISO" -extract /install.a64/initrd.gz "$TMP/$t.gz" >/dev/null 2>&1
   CGZ=$(( $(stat -f %z "$TMP/$t.gz") - STOCK ))
@@ -66,8 +66,6 @@ for t in gateway desktop single; do
   tail -c "$CGZ" "$TMP/$t.gz" > "$TMP/$t.seg"
   mkdir -p "$TMP/x-$t"
   ( cd "$TMP/x-$t" && gzip -dc "$TMP/$t.seg" | cpio -id --quiet ) >/dev/null 2>&1
-  # single: desktop/preseed.cfg through make-install-iso.sh's single_preseed (checked line by line in the single section)
-  [ "$t" = single ] && continue
   [ "$(cat "$TMP/x-$t/preseed.cfg")" = "$(cat "$REPO/$t/preseed.cfg")" ] \
     && ok "$t initrd carries $t/preseed.cfg verbatim" \
     || bad "$t payload differs from $t/preseed.cfg"
@@ -916,7 +914,7 @@ if grep -E '^(NAME|PRETTY_NAME)=' "$OSREL" | grep -q '[0-9]'; then
 else
   ok "os-release: no version on human surfaces"
 fi
-if grep -q '^VERSION_CODENAME=trixie$' "$OSREL" && grep -q '^DEBIAN_VERSION_FULL=13.7$' "$OSREL"; then
+if grep -q '^VERSION_CODENAME=trixie$' "$OSREL" && grep -q '^DEBIAN_VERSION_FULL=13.8$' "$OSREL"; then
   ok "os-release: trixie codename + machine-facing compat kept (apt stays whole)"
 else
   bad "os-release: codename/compat fields missing (would break apt tooling)"
@@ -1263,8 +1261,8 @@ grep -q '^Requires=nftables.service$' "$f" 2>/dev/null && grep -q '^After=nftabl
 chk "the firewall is a hard dependency of every network-facing unit (gateway networkd/tor/dnsmasq, desktop NM)" "[ $FW_OK = 1 ]"
 chk "export refuses a vmx that references a test ISO or is named TEST" \
   "grep -qF 'test builds are never exported' '$REPO/build/fusion/export-bundle.sh' && grep -qF 'test builds are never exported' '$REPO/build/utm/export-bundle.sh'"
-chk "test ISOs produce TEST-named VMs on every target (desktop and single through \$VM_NAME-TEST)" \
-  "grep -qF 'displayName = \\\"\$VM_NAME-TEST\\\"' '$REPO/build/fusion/create-desktop-vm.sh' && grep -q '^  two-vm) VM_NAME=ombra-desktop;' '$REPO/build/fusion/create-desktop-vm.sh' && grep -q '^  single) VM_NAME=ombra-single;' '$REPO/build/fusion/create-desktop-vm.sh' && grep -qF 'displayName = \"ombra-gateway-TEST\"' '$REPO/build/fusion/create-gateway-vm.sh'"
+chk "test ISOs produce TEST-named VMs on both targets" \
+  "grep -qF 'displayName = \\\"\$VM_NAME-TEST\\\"' '$REPO/build/fusion/create-desktop-vm.sh' && grep -q '^VM_NAME=ombra-desktop\$' '$REPO/build/fusion/create-desktop-vm.sh' && grep -qF 'displayName = \"ombra-gateway-TEST\"' '$REPO/build/fusion/create-gateway-vm.sh'"
 chk "plain-built preseeds carry the locked hash (*) on both targets" \
   "grep -qE '^d-i passwd/user-password-crypted string \\*\$' '$TMP/x-gateway/preseed.cfg' && grep -qE '^d-i passwd/user-password-crypted string \\*\$' '$TMP/x-desktop/preseed.cfg'"
 chk "08ombra neutralises 94save-logs on plain builds only; late.sh scrubs /var/log/installer" \
@@ -1339,26 +1337,14 @@ chk "gateway torrc disables the unix control socket" \
 chk "no tor drop-in depends on a control socket path" \
   "! grep -rq '/run/tor/control\\b' '$REPO/gateway/rootfs/etc/systemd' 2>/dev/null || ! grep -rE 'ExecStartPost.*run/tor/control' '$REPO/gateway/rootfs/etc/systemd' >/dev/null"
 
-echo "== transfer disks =="
+echo "== no host file channel =="
 TU="$REPO/desktop/rootfs/etc/systemd/system"
-chk "the shared disk mounts by its OMBRA-SHARE label as vfat, synchronously, private, noexec,nosuid,nodev, uid 1000" \
-  "grep -qx 'What=/dev/disk/by-label/OMBRA-SHARE' '$TU/mnt-transfer-shared.mount' && grep -qx 'Where=/mnt/transfer/shared' '$TU/mnt-transfer-shared.mount' && grep -qx 'Type=vfat' '$TU/mnt-transfer-shared.mount' && grep -E '^Options=' '$TU/mnt-transfer-shared.mount' | grep -q 'sync,flush' && grep -E '^Options=' '$TU/mnt-transfer-shared.mount' | grep -q 'umask=077' && grep -E '^Options=' '$TU/mnt-transfer-shared.mount' | grep -q 'noexec,nosuid,nodev' && grep -E '^Options=' '$TU/mnt-transfer-shared.mount' | grep -q 'uid=1000'"
-chk "the automount names the path of its mount unit and is only offered when the disk exists" \
-  "grep -qx 'Where=/mnt/transfer/shared' '$TU/mnt-transfer-shared.automount' && grep -qx 'ConditionPathExists=/dev/disk/by-label/OMBRA-SHARE' '$TU/mnt-transfer-shared.automount'"
-chk "the old inbox and outbox units are gone" \
-  "! ls '$TU'/mnt-transfer-inbox.* '$TU'/mnt-transfer-outbox.* >/dev/null 2>&1"
-chk "late.sh enables the automount and fails the install if it cannot" \
-  "grep -q 'systemctl enable mnt-transfer-shared.automount' '$REPO/desktop/late-command.sh' && grep -q 'transfer mounts' '$REPO/desktop/late-command.sh'"
-chk "the raw shared disk is hidden from Dolphin" \
-  "grep -q 'OMBRA-SHARE' '$REPO/desktop/rootfs/etc/udev/rules.d/91-ombra-hide-transfer-disks.rules' && grep -q 'UDISKS_IGNORE' '$REPO/desktop/rootfs/etc/udev/rules.d/91-ombra-hide-transfer-disks.rules'"
-chk "the transfer path does not depend on udisks2: it is in no explicit install list" \
-  "! grep -qE '(^|[ ])udisks2([ ]|\$)' '$REPO/desktop/late-command.sh' '$REPO/desktop/preseed.cfg'"
-chk "the copy script is executable, parses, targets the shared folder and syncs it" \
-  "[ -x '$REPO/desktop/rootfs/usr/local/bin/ombra-send-to-mac' ] && bash -n '$REPO/desktop/rootfs/usr/local/bin/ombra-send-to-mac' && grep -q 'out=/mnt/transfer/shared' '$REPO/desktop/rootfs/usr/local/bin/ombra-send-to-mac' && grep -q 'sync -f' '$REPO/desktop/rootfs/usr/local/bin/ombra-send-to-mac' && grep -q 'mountpoint -q' '$REPO/desktop/rootfs/usr/local/bin/ombra-send-to-mac'"
-chk "the Dolphin service menu runs that script on selected files" \
-  "grep -qx 'Exec=/usr/local/bin/ombra-send-to-mac %F' '$REPO/desktop/rootfs/usr/share/kio/servicemenus/ombra-send-to-mac.desktop'"
-chk "the sidebar has one Mac Shared Folder place and the file is well-formed XML" \
-  "python3 -c \"import sys,xml.dom.minidom as m; m.parse(sys.argv[1])\" '$REPO/desktop/rootfs/etc/skel/.local/share/user-places.xbel' && grep -q 'file:///mnt/transfer/shared' '$REPO/desktop/rootfs/etc/skel/.local/share/user-places.xbel' && ! grep -q 'From Mac\|To Mac' '$REPO/desktop/rootfs/etc/skel/.local/share/user-places.xbel'"
+chk "the desktop ships no transfer-disk mount, copy script, service menu or udev rule" \
+  "! ls '$TU'/mnt-transfer-* '$REPO/desktop/rootfs/usr/local/bin/ombra-send-to-mac' '$REPO/desktop/rootfs/usr/share/kio/servicemenus/ombra-send-to-mac.desktop' '$REPO/desktop/rootfs/etc/udev/rules.d/91-ombra-hide-transfer-disks.rules' >/dev/null 2>&1"
+chk "nothing in the desktop overlay or installer names a shared folder with the Mac" \
+  "! grep -rIqiE 'OMBRA-SHARE|mnt/transfer|Mac Shared Folder|send-to-mac' '$REPO/desktop/rootfs' '$REPO/desktop/late-command.sh' '$REPO/desktop/preseed.cfg'"
+chk "the sidebar places file is well-formed XML" \
+  "python3 -c \"import sys,xml.dom.minidom as m; m.parse(sys.argv[1])\" '$REPO/desktop/rootfs/etc/skel/.local/share/user-places.xbel'"
 
 chk "leak probe stamps its report and the host harness only trusts a report from its own run" \
   "grep -q 'started-epoch' '$G2/usr/local/sbin/ombra-leak-probe' && grep -q 'started-epoch' '$REPO/tests/leaks/run-gateway-leaks.sh' && bash -n '$REPO/tests/leaks/run-gateway-leaks.sh' && bash -n '$G2/usr/local/sbin/ombra-leak-probe'"
@@ -1443,67 +1429,6 @@ chk "window buttons rest as quiet slate dots and take the palette colours only o
 chk "the colour scheme carries no stock orange or grey leftovers" \
   "! grep -q '246,116,0\|222,222,222' '$T2/usr/share/color-schemes/ColloidDark.colors'"
 
-echo "== single edition (one VM, gateway container inside) =="
-XS="$TMP/x-single"
-SO="$TMP/single-overlay"; GC="$TMP/gateway-container"; mkdir -p "$SO" "$GC"
-( cd "$SO" && tar -xzf "$XS/ombra/single-rootfs.tar.gz" ) >/dev/null 2>&1
-( cd "$GC" && tar -xzf "$XS/ombra/gateway-container.tar.gz" ) >/dev/null 2>&1
-chk "the single ISO carries the edition marker, the three extra tarballs and the desktop payload (late.sh, overlay, pinned apps)" \
-  "[ -e '$XS/ombra/edition-single' ] && [ -s '$XS/ombra/gateway-rootfs.tar.gz' ] && [ -s '$XS/ombra/gateway-container.tar.gz' ] && [ -s '$XS/ombra/single-rootfs.tar.gz' ] && cmp -s '$XS/ombra/late.sh' '$REPO/desktop/late-command.sh' && [ -s '$XS/ombra/rootfs.tar.gz' ] && ls '$XS'/ombra/vendor/tor-browser-linux-aarch64-*.tar.xz '$XS/ombra/vendor/feather.sha256' '$XS/ombra/vendor/simplex.sha256' >/dev/null 2>&1"
-chk "the desktop and gateway ISOs carry no single marker and none of the single tarballs" \
-  "( for t in gateway desktop; do for m in edition-single gateway-rootfs.tar.gz gateway-container.tar.gz single-rootfs.tar.gz; do [ ! -e '$TMP'/x-\$t/ombra/\$m ] || exit 1; done; done )"
-# member listing without the date: the staged extra files (update key) are written at each build
-tvlist() { awk '{ $6 = $7 = $8 = ""; print }' | sort; }
-chk "the single ISO's desktop overlay is the desktop ISO's (same members, modes, sizes and link targets)" \
-  "[ \"\$(tar -tvzf '$XS/ombra/rootfs.tar.gz' | tvlist)\" = \"\$(tar -tvzf '$TMP/x-desktop/ombra/rootfs.tar.gz' | tvlist)\" ]"
-chk "the single ISO's gateway overlay is packed exactly as the gateway ISO packs it" \
-  "[ \"\$(tar -tvzf '$XS/ombra/gateway-rootfs.tar.gz' | tvlist)\" = \"\$(tar -tvzf '$TMP/x-gateway/ombra/rootfs.tar.gz' | tvlist)\" ]"
-chk "the gateway binaries drift guard covers the single target too" \
-  "grep -q 'single) DRIFT_TREES=\"desktop gateway\"' '$MKI'"
-SO_FILES="$(cd "$SO" && find . -type f | sort | tr '\n' ' ')"
-chk "the single host overlay ships exactly its eight files" \
-  "[ '$SO_FILES' = './etc/NetworkManager/conf.d/20-ombra-single.conf ./etc/NetworkManager/system-connections/ombra-intnet.nmconnection ./etc/nftables.conf ./etc/systemd/network/05-ombra-nic.link ./etc/systemd/system/ombra-gateway.service ./etc/udev/rules.d/86-ombra-gw.rules ./etc/udev/rules.d/90-ombra-hide-system-disk.rules ./usr/local/sbin/ombra-gateway-run ' ]"
-for f in ./etc/systemd/system/ombra-gateway.service ./usr/local/sbin/ombra-gateway-run ./etc/systemd/network/05-ombra-nic.link \
-         ./etc/udev/rules.d/86-ombra-gw.rules ./etc/NetworkManager/conf.d/20-ombra-single.conf; do
-  chk "the two-VM desktop overlay does not carry the single edition's $f" "[ ! -e '$T2/$f' ]"
-done
-GU="$SO/etc/systemd/system/ombra-gateway.service"
-chk "ombra-gateway.service: our own notify unit, run script, Requires+After the ombra-nic device, never Before=NetworkManager" \
-  "grep -qx 'ExecStart=/usr/local/sbin/ombra-gateway-run' '$GU' && grep -qxF 'Requires=sys-subsystem-net-devices-ombra\\x2dnic.device' '$GU' && grep -qxF 'After=sys-subsystem-net-devices-ombra\\x2dnic.device' '$GU' && ! grep -q '^Before=.*NetworkManager' '$GU' && grep -qx 'Type=notify' '$GU' && grep -qx 'NotifyAccess=all' '$GU' && grep -qx 'KillMode=mixed' '$GU' && grep -qx 'Delegate=yes' '$GU' && grep -qx 'MemoryMax=768M' '$GU' && grep -qx 'TasksMax=512' '$GU' &&  grep -qx 'RequiresMountsFor=/var/lib/ombra' '$GU' && grep -qx 'Slice=machine.slice' '$GU' && grep -qx 'WantedBy=multi-user.target' '$GU' && grep -q '^After=.*nftables.service' '$GU'"
-GR="$SO/usr/local/sbin/ombra-gateway-run"
-chk "ombra-gateway-run: executable, parses, boots the hashed image read-only with a RAM overlay, own user namespace, private network and the two interfaces" \
-  "[ -x '$GR' ] && sh -n '$GR' && grep -qF -- '--image=\"\$IMG\" --read-only --volatile=overlay -U' '$GR' && grep -qF -- '--private-network --network-interface=ombra-nic:ombra-upstream --network-veth-extra=ombra-gw:ombra-intnet' '$GR' && grep -qF -- '--resolv-conf=off --timezone=off --link-journal=no' '$GR' && grep -qF 'sha256sum \"\$IMG\"' '$GR' && grep -q 'does not match the hash recorded at install' '$GR' && grep -qx 'SUM=/usr/share/ombra/gateway.img.sha256' '$GR'"
-chk "ombra-gateway-run: the idmapped Tor-state bind exists only inside the non-overlay-root branch (Persistent), under the root-only state dir" \
-  "grep -qx 'TOR_STATE=/var/lib/ombra/gateway-state/tor' '$GR' && awk '/^[[:space:]]*#/ {next} index(\$0, \"findmnt -n -o FSTYPE /)\\\" != overlay ]; then\") {inb=1; next} inb && \$0 == \"fi\" {inb=0} index(\$0, \"idmap\") {if (inb) i++; else o++} END {exit !(i==1 && o==0)}' '$GR'"
-SN="$SO/etc/NetworkManager/system-connections/ombra-intnet.nmconnection"
-chk "the single intnet profile is bound to the veth by name with the two-VM addressing" \
-  "grep -qx 'interface-name=ombra-gw' '$SN' && grep -qx 'address1=10.55.10.100/24,10.55.10.1' '$SN' && grep -qx 'dns=10.55.10.1;' '$SN' && grep -qx 'method=disabled' '$SN'"
-chk "the VM's NIC is renamed by driver and left unmanaged by NM; the veth is managed" \
-  "grep -qx 'Driver=vmxnet3 e1000e virtio_net' '$SO/etc/systemd/network/05-ombra-nic.link' && grep -qx 'Name=ombra-nic' '$SO/etc/systemd/network/05-ombra-nic.link' && grep -qx 'unmanaged-devices=interface-name:ombra-nic' '$SO/etc/NetworkManager/conf.d/20-ombra-single.conf' && grep -qF 'KERNEL==\"ombra-gw\", ENV{NM_UNMANAGED}=\"0\"' '$SO/etc/udev/rules.d/86-ombra-gw.rules'"
-GCN="$REPO/gateway/container/etc/systemd/network"
-chk "gateway/container network files match by name (never by driver), DHCP upstream, static intnet that comes up without carrier" \
-  "grep -qx 'Name=ombra-upstream' '$GCN/10-upstream.network' && grep -qx 'DHCP=yes' '$GCN/10-upstream.network' && grep -qx 'SendHostname=no' '$GCN/10-upstream.network' && grep -qx 'UseDNS=false' '$GCN/10-upstream.network' && grep -qx 'UseNTP=false' '$GCN/10-upstream.network' && grep -qx 'Name=ombra-intnet' '$GCN/20-intnet.network' && grep -qx 'Address=10.55.10.1/24' '$GCN/20-intnet.network' && grep -qx 'ConfigureWithoutCarrier=yes' '$GCN/20-intnet.network' && ! grep -q '^Driver=' '$GCN'/*.network && ! grep -q '#' '$GCN'/*.network && [ \"\$(grep -c '^LinkLocalAddressing=no\$' '$GCN'/*.network | grep -c ':1\$')\" = 2 ]"
-chk "the container overlay tarball carries exactly the two network files (its README stays in the repo)" \
-  "[ \"\$(cd '$GC' && find . -type f | sort | tr '\n' ' ')\" = './etc/systemd/network/10-upstream.network ./etc/systemd/network/20-intnet.network ' ]"
-SINGLE_SEC="$(awk '/^if \[ -e \/ombra\/edition-single \]; then$/ {s=1} s {print} s && /^else$/ {exit}' "$LC")"
-SINGLE_TAIL="$(printf '%s\n' "$SINGLE_SEC" | grep -v '^else$' | grep -v '^[[:space:]]*$' | tail -2)"
-chk "late-command's single section is guarded by the marker and ends in the wants-symlink assertion" \
-  "[ -n \"\$SINGLE_SEC\" ] && printf '%s\n' \"\$SINGLE_TAIL\" | head -1 | grep -qF '[ -L /target/etc/systemd/system/multi-user.target.wants/ombra-gateway.service ]' && printf '%s\n' \"\$SINGLE_TAIL\" | tail -1 | grep -q 'ombra_fatal'"
-chk "the single section's work never leaks outside the marker guard" \
-  "[ \"\$(grep -c 'single-rootfs.tar.gz\\|gateway-container.tar.gz\\|mmdebstrap --mode\\|ombra-gateway.service' '$LC')\" = \"\$(printf '%s\n' \"\$SINGLE_SEC\" | grep -c 'single-rootfs.tar.gz\\|gateway-container.tar.gz\\|mmdebstrap --mode\\|ombra-gateway.service')\" ]"
-chk "the single section builds a minbase container from the three trixie suites, without a proxy, and parks on failure" \
-  "printf '%s\n' \"\$SINGLE_SEC\" | grep -q 'exec mmdebstrap --mode=root --variant=minbase' && printf '%s\n' \"\$SINGLE_SEC\" | grep -q 'trixie-security' && printf '%s\n' \"\$SINGLE_SEC\" | grep -q 'trixie-updates' && ! printf '%s\n' \"\$SINGLE_SEC\" | grep -v '^[[:space:]]*#' | grep -qi 'proxy' && printf '%s\n' \"\$SINGLE_SEC\" | grep -q 'mmdebstrap could not build'"
-chk "the single section builds the ext4 image as the prototype did, hashes it and drops the tree" \
-  "printf '%s\n' \"\$SINGLE_SEC\" | grep -qF 'mke2fs -q -t ext4 -L ombra-gw -m 0 -E root_owner=0:0 -d \"\$GW_TREE\" \"\$GW_IMG\"' && printf '%s\n' \"\$SINGLE_SEC\" | grep -q 'usr/share/ombra/gateway.img.sha256' && printf '%s\n' \"\$SINGLE_SEC\" | grep -q 'under 100 MB' && printf '%s\n' \"\$SINGLE_SEC\" | grep -q 'rm -rf \"\$GWT\"'"
-chk "the single section masks remount-fs and the consoles, enables the gateway units, and checks nftables.conf and torrc against the gateway overlay" \
-  "( for w in systemd-remount-fs.service console-getty.service systemd-logind.service ombra-torctl-filter.service 'etc/nftables.conf etc/tor/torrc' 'visudo -c' gateway-packages.txt 'GW_STATE=/var/lib/ombra/gateway-state' 'chmod 2700'; do printf '%s\n' \"\$SINGLE_SEC\" | grep -qF \"\$w\" || exit 1; done )"
-chk "two-VM builds record their edition (desktop else-branch, gateway after the overlay unpack)" \
-  "grep -A1 '^else\$' '$LC' | grep -q \"printf 'two-vm\" && grep -q \"printf 'two-vm\\\\\\\\n' > /target/etc/ombra/edition\" '$REPO/gateway/late-command.sh'"
-chk "the desktop sysctl IPv6 keys tolerate ipv6.disable=1 (the '-' prefix, as on the gateway)" \
-  "grep -qx -- '-net.ipv6.conf.all.disable_ipv6 = 1' '$REPO/desktop/rootfs/etc/sysctl.d/60-ombra-desktop.conf' && ! grep -q '^net.ipv6' '$REPO/desktop/rootfs/etc/sysctl.d/60-ombra-desktop.conf'"
-chk "the single edition ships only as its ISO: no exporter or verifier takes it; the test-VM scripts still make it (one NAT NIC)" \
-  "for f in fusion/export-bundle.sh fusion/verify-bundle.sh utm/export-bundle.sh utm/verify-bundle.sh; do ! grep -q 'desktop|gateway|single' '$REPO/build/'\$f && ! grep -q '^ *\\*single\\*)' '$REPO/build/'\$f && ! grep -q 'target == \"single\"' '$REPO/build/'\$f || exit 1; done && grep -q 'case \"\$TARGET\" in desktop|gateway) ;;' '$REPO/build/fusion/export-bundle.sh' && grep -q 'vmx_set ethernet0.connectionType nat' '$REPO/build/fusion/post-install-desktop.sh' && grep -q '^  single) VM_NAME=ombra-single;' '$REPO/build/fusion/create-desktop-vm.sh' && grep -q '^  single) VM_NAME=ombra-single ;;' '$REPO/build/fusion/post-install-desktop.sh'"
-
 echo "== /home on its own logical volume =="
 RECIPE_CHECK='
 import re, sys
@@ -1541,214 +1466,11 @@ chk "late-command parks unless /home is a separate mount in the target fstab and
 chk "kact-wipe waits for the /home mount (RequiresMountsFor), keeping its no-default-dependencies ordering" \
   "grep -qx 'RequiresMountsFor=/home/ombra' '$REPO/desktop/rootfs/etc/systemd/system/kact-wipe.service' && grep -qx 'After=home.mount systemd-remount-fs.service' '$REPO/desktop/rootfs/etc/systemd/system/kact-wipe.service'"
 
-echo "== single edition: the end user's installer ISO =="
-SP="$TMP/x-single/preseed.cfg"
-DP="$REPO/desktop/preseed.cfg"
-# the only keys the single preseed may drop from or change against desktop/preseed.cfg, and the only ones it adds
-SINGLE_PRESEED_CHECK='
-import re, sys
-exempt = {"partman-crypto/passphrase", "partman-crypto/passphrase-again", "passwd/user-password-crypted",
-          "partman-auto/disk", "partman-crypto/weak_passphrase", "debian-installer/exit/poweroff"}
-added = {"partman/early_command", "cdrom-detect/eject"}
-def lines(path, drop):
-    out = []
-    for l in open(path).read().split("\n"):
-        if l.startswith("#"):
-            continue
-        f = l.split()
-        if len(f) >= 2 and f[1] in drop and not l.startswith((" ", "\t")):
-            continue
-        out.append(l)
-    while out and out[-1] == "":
-        out.pop()
-    return out
-d = lines(sys.argv[1], exempt)
-s = lines(sys.argv[2], exempt | added)
-assert d == s, "\n".join(x for x in set(d) ^ set(s))[:2000]
-'
-chk "every desktop preseed line that is not exempt is in the single preseed unchanged, in order (no drift)" \
-  "python3 -c '$SINGLE_PRESEED_CHECK' '$DP' '$SP'"
-chk "the single preseed asks the disk passphrase and the account password (their keys are absent) and pins no disk" \
-  "! grep -qE '^[^#]*(partman-crypto/passphrase|passwd/user-password-crypted|partman-auto/disk)' '$SP'"
-chk "the single preseed carries no secret: no build passphrase, no password hash, no test value" \
-  "! grep -q 'ombra-disk' '$SP' && ! grep -q 'ombra-test-disk' '$SP' && ! grep -qE '\\\$(1|5|6|y|2[aby])\\\$' '$SP' && [ ! -e '$TMP/x-single/ombra/test-build' ]"
-chk "the single preseed keeps the user name fixed, root login off, root locked and the account out of sudo (default groups)" \
-  "grep -qx 'd-i passwd/username string ombra' '$SP' && grep -qx 'd-i passwd/user-fullname string ombra' '$SP' && grep -qx 'd-i passwd/root-login boolean false' '$SP' && grep -qx 'd-i passwd/root-password-crypted string \\*' '$SP' && grep -qx 'd-i passwd/user-default-groups string audio video' '$SP'"
-chk "the single preseed re-asks a passphrase under 8 characters (the unlock screen's minimum), uses a 512-bit key and keeps the US keyboard" \
-  "grep -qx 'd-i partman-crypto/weak_passphrase boolean false' '$SP' && ! grep -q 'partman-crypto/keysize' '$SP' && grep -qx 'd-i keyboard-configuration/xkb-keymap select us' '$SP' && grep -qx 'd-i debian-installer/keymap select us' '$SP'"
-chk "the single preseed picks the disk in partman's early command, ejects the CD, leaves netcfg's profile out and REBOOTS" \
-  "grep -qx 'd-i partman/early_command string sh /ombra/early.sh' '$SP' && grep -qx 'd-i cdrom-detect/eject boolean true' '$SP' && grep -qx 'd-i netcfg/target_network_config select loopback' '$SP' && grep -qx 'd-i debian-installer/exit/poweroff boolean false' '$SP' && grep -qx 'd-i finish-install/reboot_in_progress note' '$SP'"
-chk "the two-VM desktop still powers off (the build host post-processes it)" \
-  "grep -qx 'd-i debian-installer/exit/poweroff boolean true' '$TMP/x-desktop/preseed.cfg'"
-if python3 -c "$RECIPE_CHECK" "$SP" >/dev/null 2>&1; then ok "the single preseed carries the same LUKS + LVM recipe (root, swap, home, snapshot space)"; else bad "the single preseed's partman recipe is broken"; fi
-chk "the single ISO carries the early check (executable) and its dialog template; the two-VM ISOs carry neither" \
-  "[ -x '$TMP/x-single/ombra/early.sh' ] && cmp -s '$TMP/x-single/ombra/early.sh' '$REPO/build/single-iso/early.sh' && cmp -s '$TMP/x-single/var/lib/dpkg/info/ombra-single.templates' '$REPO/build/single-iso/ombra-single.templates' && for t in gateway desktop; do [ ! -e '$TMP'/x-\$t/ombra/early.sh ] && [ ! -e '$TMP'/x-\$t/var/lib/dpkg/info/ombra-single.templates ] || exit 1; done"
-chk "the early check and the release script parse (sh, dash, bash)" \
-  "sh -n '$REPO/build/single-iso/early.sh' && dash -n '$REPO/build/single-iso/early.sh' && bash -n '$REPO/build/release-single-iso.sh'"
-chk "the dialog template is an error at critical priority use, with the reason substituted" \
-  "grep -qx 'Template: ombra/vm-too-small' '$REPO/build/single-iso/ombra-single.templates' && grep -qx 'Type: error' '$REPO/build/single-iso/ombra-single.templates' && grep -q '\${REASON}' '$REPO/build/single-iso/ombra-single.templates' && grep -q 'db_input critical ombra/vm-too-small' '$REPO/build/single-iso/early.sh'"
-
-# the early check, run for real against stubs: debconf, list-devices, mount, /proc/meminfo and /sys/block
-EA="$TMP/early"; mkdir -p "$EA/bin"
-cat > "$EA/confmodule" <<'STUB'
-db_fset() { :; }
-db_subst() { printf '%s\n' "$3" > "$EA/reason"; }
-db_input() { return 0; }
-db_go() { exit 9; }
-db_set() { printf '%s=%s\n' "$1" "$2" > "$EA/set"; }
-STUB
-printf '#!/bin/sh\nexit 0\n' > "$EA/bin/chvt"
-sed -e "s#/usr/share/debconf/confmodule#$EA/confmodule#" -e "s#/proc/meminfo#$EA/meminfo#" -e "s#/sys/block/#$EA/sys/#" \
-  "$REPO/build/single-iso/early.sh" > "$EA/early.sh"
-early_run() { # <MemTotal kB> <disks> <cdrom source or -> <sectors per disk ...>: the exit code; $EA/set and $EA/reason
-  local mem="$1" disks="$2" cd="$3"; shift 3
-  rm -rf "$EA/sys" "$EA/set" "$EA/reason"; mkdir -p "$EA/sys"
-  printf 'MemTotal:       %s kB\nMemFree:        1000 kB\n' "$mem" > "$EA/meminfo"
-  printf '#!/bin/sh\nfor d in %s; do echo "$d"; done\n' "$disks" > "$EA/bin/list-devices"
-  if [ "$cd" = - ]; then printf '#!/bin/sh\necho "proc on /proc type proc (rw)"\n' > "$EA/bin/mount"
-  else printf '#!/bin/sh\necho "%s on /cdrom type iso9660 (ro)"\n' "$cd" > "$EA/bin/mount"; fi
-  chmod +x "$EA/bin/"*
-  for d in $disks; do mkdir -p "$EA/sys/${d#/dev/}"; printf '%s\n' "$1" > "$EA/sys/${d#/dev/}/size"; shift; done
-  EA="$EA" PATH="$EA/bin:$PATH" sh "$EA/early.sh" >/dev/null 2>&1
-}
-early_run 6000000 "/dev/nvme0n1" - 62914560; rc=$?
-chk "early check: a 30 GB NVMe disk and 6 GB pass, and the disk is handed to partman" "[ $rc = 0 ] && grep -qx 'partman-auto/disk=/dev/nvme0n1' '$EA/set'"
-early_run 2900000 "/dev/vda /dev/vdb" /dev/vda 1400000 62914560; rc=$?
-chk "early check: the install medium attached as a virtio disk is skipped (UTM), and a 3 GB VM passes" "[ $rc = 0 ] && grep -qx 'partman-auto/disk=/dev/vdb' '$EA/set'"
-early_run 6000000 "/dev/vda" - 41943040; rc=$?
-chk "early check: a 21 GB disk stops the install with the reason, before partman" "[ $rc = 9 ] && [ ! -e '$EA/set' ] && grep -q 'needs at least 24 GB' '$EA/reason'"
-early_run 1950000 "/dev/vda" - 62914560; rc=$?
-chk "early check: a 2 GB VM stops the install with the reason" "[ $rc = 9 ] && [ ! -e '$EA/set' ] && grep -q 'needs at least 3 GB' '$EA/reason'"
-early_run 6000000 "/dev/sr0" /dev/sr0 1400000; rc=$?
-chk "early check: no disk besides the install medium stops the install" "[ $rc = 9 ] && grep -q 'found no disk' '$EA/reason'"
-
-xorriso -osirrox on -indev "$REPO/build/disks/ombra-install-single.iso" -extract /boot/grub/grub.cfg "$TMP/gs.cfg" >/dev/null 2>&1
-xorriso -osirrox on -indev "$REPO/build/disks/ombra-install-desktop.iso" -extract /boot/grub/grub.cfg "$TMP/gd.cfg" >/dev/null 2>&1
-chk "the single ISO boots its own entry: 'Install Ombra (single VM)', a short timeout, the two-VM kernel line, nothing to type" \
-  "cmp -s '$TMP/gs.cfg' '$REPO/build/installer-grub-single.cfg' && grep -q 'menuentry \"Install Ombra (single VM)\"' '$TMP/gs.cfg' && grep -qx 'set timeout=3' '$TMP/gs.cfg' && [ \"\$(grep '^ *linux ' '$TMP/gs.cfg')\" = \"\$(grep '^ *linux ' '$REPO/build/installer-grub.cfg')\" ] && grep -q 'auto=true priority=critical' '$TMP/gs.cfg'"
-chk "the gateway and desktop ISOs keep the unattended entry" \
-  "cmp -s '$TMP/gd.cfg' '$REPO/build/installer-grub.cfg' && cmp -s '$TMP/g.cfg' '$REPO/build/installer-grub.cfg'"
-xorriso -osirrox on -indev "$REPO/build/disks/ombra-install-single.iso" -extract /README.txt "$TMP/readme-single.txt" >/dev/null 2>&1
-xorriso -osirrox on -indev "$REPO/build/disks/ombra-install-desktop.iso" -extract /README.txt "$TMP/readme-desktop.txt" >/dev/null 2>&1
-chk "the single ISO's root README.txt is Ombra's (requirements and the three steps); the desktop ISO keeps Debian's" \
-  "cmp -s '$TMP/readme-single.txt' '$REPO/build/single-iso/README.txt' && grep -q 'THREE STEPS' '$TMP/readme-single.txt' && grep -q 'Apple Silicon' '$TMP/readme-single.txt' && grep -q 'NAT' '$TMP/readme-single.txt' && ! grep -q 'THREE STEPS' '$TMP/readme-desktop.txt'"
-
-# a TEST single ISO (never distributed) stays unattended; built into a scratch directory, never over build/disks
-TI="$TMP/testiso"; mkdir -p "$TI"
-disks_state() { ls -l "$REPO/build/disks/" 2>/dev/null; }
-DISKS_BEFORE="$(disks_state)"
-if OMBRA_ISO_OUT="$TI" OMBRA_TEST_GUEST_PASSWORD=test-guest-pw bash "$REPO/build/make-install-iso.sh" single > "$TMP/build-single-test.log" 2>&1; then
-  ok "TEST single ISO built (into a scratch directory)"
-  xorriso -osirrox on -indev "$TI/ombra-install-single-test.iso" -extract /install.a64/initrd.gz "$TMP/st.gz" >/dev/null 2>&1
-  CGZ=$(( $(stat -f %z "$TMP/st.gz") - STOCK )); tail -c "$CGZ" "$TMP/st.gz" > "$TMP/st.seg"; mkdir -p "$TMP/x-st"
-  ( cd "$TMP/x-st" && gzip -dc "$TMP/st.seg" | cpio -id --quiet ) >/dev/null 2>&1
-  TP="$TMP/x-st/preseed.cfg"
-  chk "TEST single: disk passphrase preseeded twice from the default ombra-test-disk, the account hash set, unattended" \
-    "grep -qx 'd-i partman-crypto/passphrase password ombra-test-disk' '$TP' && grep -qx 'd-i partman-crypto/passphrase-again password ombra-test-disk' '$TP' && grep -qE '^d-i passwd/user-password-crypted string \\\$6\\\$' '$TP' && ! grep -q 'ombra-disk\$' '$TP'"
-  chk "TEST single: powers off at the end, carries the test marker and the wider agent allowlist" \
-    "grep -qx 'd-i debian-installer/exit/poweroff boolean true' '$TP' && [ -e '$TMP/x-st/ombra/test-build' ] && [ -e '$TMP/x-st/ombra/edition-single' ]"
-  chk "TEST single: every other line equals the end-user single preseed" \
-    "[ \"\$(grep -vE '^d-i (partman-crypto/passphrase|partman-crypto/passphrase-again|passwd/user-password-crypted|passwd/root-login|passwd/root-password-crypted|debian-installer/exit/poweroff) ' '$TP')\" = \"\$(grep -vE '^d-i (passwd/root-login|passwd/root-password-crypted|debian-installer/exit/poweroff) ' '$SP')\" ]"
-  chk "the TEST build wrote nothing into build/disks (OMBRA_ISO_OUT)" "[ \"\$(disks_state)\" = \"\$DISKS_BEFORE\" ]"
-else
-  bad "TEST single ISO build failed:"; sed 's/^/       /' "$TMP/build-single-test.log" | tail -5
-fi
-for p in ombra-disk short1 'has space'; do
-  if OMBRA_ISO_OUT="$TI/refused" OMBRA_TEST_DISK_PASSPHRASE="$p" OMBRA_TEST_GUEST_PASSWORD=x bash "$REPO/build/make-install-iso.sh" single > "$TMP/refuse.log" 2>&1; then
-    bad "a TEST single build accepted the disk passphrase '$p'"
-  else
-    grep -q 'OMBRA_TEST_DISK_PASSPHRASE' "$TMP/refuse.log" && ok "a TEST single build refuses the disk passphrase '$p'" || bad "a TEST single build failed on '$p' for another reason"
-  fi
-done
-
-SN2="$REPO/desktop/single/etc/nftables.conf"
-chk "single firewall: the desktop ruleset with only the three gateway rules bound to ombra-gw (comments aside)" \
-  "[ \"\$(grep -v '^ *#' '$REPO/desktop/rootfs/etc/nftables.conf')\" = \"\$(grep -v '^ *#' '$SN2' | sed -E 's/^( *)(oifname|iifname) \"ombra-gw\" /\\1/')\" ] && [ \"\$(grep -c '^    oifname \"ombra-gw\" ip daddr 10.55.10.1 counter accept\$' '$SN2')\" = 1 ] && [ \"\$(grep -c '^    iifname \"ombra-gw\" ip saddr 10.55.10.1 ' '$SN2')\" = 2 ] && [ \"\$(grep -v '^ *#' '$SN2' | grep -c '\"ombra-gw\"')\" = 3 ]"
-chk "single firewall: the ISO's host overlay carries it, and late-command checks it landed" \
-  "cmp -s '$SO/etc/nftables.conf' '$SN2' && grep -qF 'ifname \"ombra-gw\" ip [sd]addr 10.55.10.1 ' '$LC'"
-chk "the system disk is hidden from the file manager whether it is NVMe (Fusion) or virtio (UTM)" \
-  "grep -qx 'KERNEL==\"vd\[a-z\]\*\", ENV{UDISKS_IGNORE}=\"1\"' '$SO/etc/udev/rules.d/90-ombra-hide-system-disk.rules' && grep -qx 'KERNEL==\"nvme\[0-9\]\*\", ENV{UDISKS_IGNORE}=\"1\"' '$SO/etc/udev/rules.d/90-ombra-hide-system-disk.rules'"
-
-GR2="$REPO/desktop/single/usr/local/sbin/ombra-gateway-run"
-chk "ombra-gateway-run: no-new-privileges and the capability drop are separate argument lines, each commented" \
-  "grep -qx 'set -- \"\$@\" --no-new-privileges=yes' '$GR2' && grep -qx 'set -- \"\$@\" --drop-capability=CAP_SYS_PTRACE,CAP_SYS_BOOT,CAP_AUDIT_CONTROL,CAP_AUDIT_WRITE,CAP_MKNOD,CAP_SYS_TTY_CONFIG,CAP_LINUX_IMMUTABLE,CAP_IPC_OWNER' '$GR2' && grep -B1 -- '--no-new-privileges=yes' '$GR2' | head -1 | grep -q '^#' && grep -q 'CAP_SYS_NICE and CAP_SYS_RESOURCE stay' '$GR2' && grep -q '\"\$@\" --machine=ombra-gateway' '$GR2'"
-chk "ombra-gateway-run: the capability drop never names a capability systemd or networkd needs" \
-  "! grep -- '--drop-capability' '$GR2' | grep -qE 'CAP_(SYS_ADMIN|NET_ADMIN|NET_BIND_SERVICE|NET_RAW|SETUID|SETGID|SETPCAP|CHOWN|DAC_OVERRIDE|DAC_READ_SEARCH|FOWNER|KILL|SYS_CHROOT|SYS_NICE|SYS_RESOURCE)'"
-chk "ombra-gateway.service: no device policy (measured: any DevicePolicy makes nspawn fail to shift the image's uids), memory and task limits" \
-  "! grep -qE '^(DevicePolicy|DeviceAllow)=' '$SO/etc/systemd/system/ombra-gateway.service' && grep -q 'Failed to adjust' '$SO/etc/systemd/system/ombra-gateway.service' && grep -qx 'MemoryMax=768M' '$SO/etc/systemd/system/ombra-gateway.service' && grep -qx 'TasksMax=512' '$SO/etc/systemd/system/ombra-gateway.service'"
-
-echo "== single edition: late-command for a disk sealed from the start =="
-chk "late-command keys the single steps on the edition marker" \
-  "grep -qx '\\[ ! -e /ombra/edition-single \\] || SINGLE=1' '$LC'"
-LUKS_AWK="$(grep -F 'END {exit !(v == 2' "$LC" | sed -E "s/^ *awk '//; s/' \/target\/var\/tmp\/ombra-luksdump.txt.*\$//")"
-luks_fixture() { # <version> <segment cipher> <key bits> <pbkdf> <keyslots>
-  printf 'LUKS header information\nVersion:       \t%s\nEpoch:         \t3\nUUID:          \t1234\n\nData segments:\n  0: crypt\n\toffset: 16777216 [bytes]\n\tlength: (whole device)\n\tcipher: %s\n\tsector: 512 [bytes]\n\nKeyslots:\n' "$1" "$2"
-  i=0; while [ "$i" -lt "$5" ]; do
-    printf '  %s: luks2\n\tKey:        %s bits\n\tPriority:   normal\n\tCipher:     aes-xts-plain64\n\tCipher key: 512 bits\n\tPBKDF:      %s\n\tTime cost:  4\n\tMemory:     1048576\n\tThreads:    4\n\tSalt:       aa bb\n\t            cc dd\n\tAF stripes: 4000\n\tAF hash:    sha256\n\tDigest ID:  0\n' "$i" "$3" "$4"
-    i=$((i + 1))
-  done
-  printf 'Tokens:\nDigests:\n  0: pbkdf2\n\tHash:       sha256\n\tIterations: 129774\n\tSalt:       ee ff\n\tDigest:     00 11\n'
-}
-luks_ok() { luks_fixture "$@" > "$TMP/dump.txt"; awk "$LUKS_AWK" "$TMP/dump.txt"; }
-chk "LUKS check: accepts LUKS2, aes-xts-plain64, one argon2id keyslot with a 512-bit key" "[ -n \"\$LUKS_AWK\" ] && luks_ok 2 aes-xts-plain64 512 argon2id 1"
-chk "LUKS check: refuses a 256-bit key (d-i's default)" "! luks_ok 2 aes-xts-plain64 256 argon2id 1"
-chk "LUKS check: refuses pbkdf2, LUKS1, another cipher, a second keyslot" \
-  "! luks_ok 2 aes-xts-plain64 512 pbkdf2 1 && ! luks_ok 1 aes-xts-plain64 512 argon2id 1 && ! luks_ok 2 aes-cbc-essiv:sha256 512 argon2id 1 && ! luks_ok 2 aes-xts-plain64 512 argon2id 2"
-chk "late-command parks unless cryptsetup says exit 2 (no key matches) for the public build passphrase, with and without a newline" \
-  "grep -qF 'printf \"ombra-disk\$2\" | cryptsetup open --test-passphrase --key-file - \"\$1\"' '$LC' && grep -qF '[ \"\$rc\" = 2 ] || ombra_fatal' '$LC' && grep -q 'the disk passphrase is Ombra.s public build passphrase' '$LC'"
-PG_AWK="$(grep -F 'priv_groups="$(awk -F:' "$LC" | sed -e "s/^ *priv_groups=\"\$(awk -F: '//" -e "s#' /target/etc/group)\"\$##")"
-printf 'root:x:0:\nsudo:x:27:\naudio:x:29:ombra\nusers:x:100:ombra\nvideo:x:44:ombra\n' > "$TMP/group-ok"
-printf 'root:x:0:\nsudo:x:27:bob,ombra\naudio:x:29:ombra\n' > "$TMP/group-sudo"
-printf 'adm:x:4:ombra\n' > "$TMP/group-adm"
-chk "account check: audio, video and users pass; sudo and adm are caught" \
-  "[ -n \"\$PG_AWK\" ] && [ -z \"\$(awk -F: \"\$PG_AWK\" '$TMP/group-ok')\" ] && [ \"\$(awk -F: \"\$PG_AWK\" '$TMP/group-sudo')\" = sudo ] && [ \"\$(awk -F: \"\$PG_AWK\" '$TMP/group-adm')\" = adm ]"
-chk "late-command (single) parks unless the account has a real hash, root is locked (release builds) and no privileged group" \
-  "grep -q 'the account ombra has no password hash, or is locked' '$LC' && grep -q 'root has a usable password' '$LC' && grep -q 'ombra is in a privileged group' '$LC'"
-chk "single: the first-use unit is removed and masked, the setup gate and the SDDM gate stay; two-VM enables all four as before" \
-  "grep -q 'in-target systemctl mask ombra-welcome.service' '$LC' && grep -q 'ombra-welcome.service is not masked' '$LC' && grep -q '^in-target systemctl enable ombra-setup-gate.service ombra-askpass.service ombra-askpass-fallback.service' '$LC' && grep -q '^in-target systemctl enable ombra-setup-gate.service ombra-welcome.service ombra-askpass.service ombra-askpass-fallback.service' '$LC' && grep -q 'sddm first-use gate drop-in missing' '$LC'"
-chk "single: the guest closes VMware shared folders (client deleted, dpkg-excluded) and the UTM clipboard (session agent never executable)" \
-  "grep -qF 'path-exclude=/usr/*bin/vmhgfs-fuse' '$LC' && grep -q 'the VMware shared-folder client is still present' '$LC' && grep -qF 'dpkg-statoverride --update --add root root 0644 /usr/bin/spice-vdagent' '$LC' && grep -q 'spice-vdagent is still executable' '$LC'"
-chk "both editions ship /etc/resolv.conf naming only the gateway (not the installer's NAT resolver)" \
-  "grep -qF \"printf 'nameserver 10.55.10.1\\\\n' > /target/etc/resolv.conf\" '$LC' && grep -q 'the installer.s NAT resolver would ship' '$LC'"
-chk "single: the gateway image and its hash are made immutable at the end, and checked" \
-  "grep -qF 'chroot /target chattr +i /var/lib/ombra/gateway.img /usr/share/ombra/gateway.img.sha256' '$LC' && grep -q 'is not immutable' '$LC' && [ \"\$(grep -n 'chattr +i /var/lib/ombra/gateway.img' '$LC' | cut -d: -f1)\" -lt \"\$(grep -n '^touch /target/var/lib/ombra/late-ran' '$LC' | cut -d: -f1)\" ]"
-for f in "$LC" "$REPO/desktop/single/usr/local/sbin/ombra-gateway-run" "$REPO/build/single-iso/early.sh"; do
-  chk "dash -n $(basename "$f")" "dash -n '$f'"
-done
-
-echo "== single edition: release tooling =="
-chk "scripts/build.sh --edition single stops after the ISO and says where it is (no VM is created)" \
-  "grep -q '^finish_single()' '$REPO/scripts/build.sh' && ! grep -q 'build_single_vm' '$REPO/scripts/build.sh' && grep -q 'build/disks/ombra-install-single.iso' '$REPO/scripts/build.sh' && bash -n '$REPO/scripts/build.sh'"
-chk "the VM exporters keep the single ISO's line when they rewrite SHA256SUMS.txt" \
-  "grep -q 'ombra-\\*.vmwarevm.zip ombra-\\*.utm.zip ombra-\\*.iso' '$REPO/build/fusion/export-bundle.sh' && grep -q 'ombra-\\*.vmwarevm.zip ombra-\\*.utm.zip ombra-\\*.iso' '$REPO/build/utm/export-bundle.sh'"
-# release-single-iso.sh against fixture ISOs (a real single ISO is never published by the tests)
-RS="$TMP/release"; mkdir -p "$RS"
-fake_iso() { # <out.iso> <volid> <extra member or -> <preseed line or ->
-  local d="$RS/tree-$RANDOM"; mkdir -p "$d/root/install.a64" "$d/cpio/ombra"
-  : > "$d/cpio/ombra/edition-single"
-  printf 'd-i passwd/username string ombra\n' > "$d/cpio/preseed.cfg"
-  [ "$3" = - ] || : > "$d/cpio/$3"
-  [ "$4" = - ] || printf '%s\n' "$4" >> "$d/cpio/preseed.cfg"
-  printf 'stock' | gzip > "$d/root/install.a64/initrd.gz"
-  ( cd "$d/cpio" && find . | cpio -o -H newc --quiet | gzip ) >> "$d/root/install.a64/initrd.gz"
-  xorriso -outdev "$1" -volid "$2" -map "$d/root" / >/dev/null 2>&1
-}
-rs_run() { OMBRA_RELEASE_DIR="$RS/out" OMBRA_VERSION=9.8.7 bash "$REPO/build/release-single-iso.sh" "$1" > "$RS/log" 2>&1; }
-mkdir -p "$RS/out"; printf '%s  ombra-desktop-arm64-v9.8.7.utm.zip\n' "$(printf x | shasum -a 256 | cut -d' ' -f1)" > "$RS/out/SHA256SUMS.txt"
-fake_iso "$RS/good.iso" Ombra-single-arm64 - -
-chk "release script: a clean single ISO is copied as ombra-single-arm64-v<version>.iso and summed in the exporters' format" \
-  "rs_run '$RS/good.iso' && cmp -s '$RS/good.iso' '$RS/out/ombra-single-arm64-v9.8.7.iso' && grep -qE '^[0-9a-f]{64}  ombra-single-arm64-v9.8.7.iso\$' '$RS/out/SHA256SUMS.txt' && grep -q 'ombra-desktop-arm64-v9.8.7.utm.zip' '$RS/out/SHA256SUMS.txt' && (cd '$RS/out' && shasum -a 256 -c SHA256SUMS.txt 2>/dev/null | grep -q 'ombra-single-arm64-v9.8.7.iso: OK')"
-chk "release script: a second run replaces its line instead of adding one" \
-  "rs_run '$RS/good.iso' && [ \"\$(grep -c 'ombra-single-arm64-v9.8.7.iso' '$RS/out/SHA256SUMS.txt')\" = 1 ] && [ \"\$(wc -l < '$RS/out/SHA256SUMS.txt' | tr -d ' ')\" = 2 ]"
-fake_iso "$RS/marker.iso" Ombra-single-arm64 ombra/test-build -
-chk "release script: a script that only mentions the marker path (as early.sh does) is not the marker" \
-  "d=\$(mktemp -d) && mkdir -p \$d/root/install.a64 \$d/cpio/ombra && : > \$d/cpio/ombra/edition-single && printf 'd-i passwd/username string ombra\\n' > \$d/cpio/preseed.cfg && printf 'if [ ! -e /ombra/test-build ]; then\\n  : > /ombra/test-build\\nfi\\n' > \$d/cpio/ombra/early.sh && printf stock | gzip > \$d/root/install.a64/initrd.gz && (cd \$d/cpio && find . | cpio -o -H newc --quiet | gzip) >> \$d/root/install.a64/initrd.gz && xorriso -outdev '$RS/mention.iso' -volid Ombra-single-arm64 -map \$d/root / >/dev/null 2>&1 && rs_run '$RS/mention.iso'"
-fake_iso "$RS/pass.iso" Ombra-single-arm64 - 'd-i partman-crypto/passphrase password ombra-test-disk'
-fake_iso "$RS/hash.iso" Ombra-single-arm64 - 'd-i passwd/user-password-crypted string $6$abc$def'
-fake_iso "$RS/desktop.iso" Ombra-desktop-arm64 - -
-cp "$RS/good.iso" "$RS/ombra-install-single-test.iso"
-chk "release script: refuses a TEST name, the test marker, a preseeded passphrase, a password hash and another edition's ISO" \
-  "! rs_run '$RS/ombra-install-single-test.iso' && ! rs_run '$RS/marker.iso' && grep -q 'test-build marker' '$RS/log' && ! rs_run '$RS/pass.iso' && ! rs_run '$RS/hash.iso' && grep -q 'passphrase or a password hash' '$RS/log' && ! rs_run '$RS/desktop.iso' && grep -q 'not the single edition' '$RS/log'"
+echo "== one edition =="
+chk "the single VM edition is gone: no builder target, no host overlay, no container overlay, no marker in late-command" \
+  "! bash '$REPO/build/make-install-iso.sh' single >/dev/null 2>&1 && [ ! -e '$REPO/desktop/single' ] && [ ! -e '$REPO/gateway/container' ] && [ ! -e '$REPO/build/single-iso' ] && ! grep -q 'edition-single\\|SINGLE' '$REPO/desktop/late-command.sh'"
+chk "both installers record the one edition, and the updater refuses a machine marked single" \
+  "grep -q \"printf 'two-vm\" '$REPO/desktop/late-command.sh' && grep -q \"printf 'two-vm\" '$REPO/gateway/late-command.sh' && grep -q 'single) echo \"ombra-update: the single VM edition is discontinued' '$REPO/update/rootfs/usr/local/sbin/ombra-update'"
 
 if [ "$FAILS" -gt 0 ]; then
   echo "FAILED: $FAILS test(s)"

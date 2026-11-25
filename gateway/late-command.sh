@@ -36,7 +36,7 @@ phase() {
 # ---- build-network residue -------------------------------------------------------------------------------------------
 # The installer ran on the hypervisor's NAT: its resolv.conf, DHCP lease and syslog held that network's addresses, and
 # files rewritten or deleted during the install leave copies in FREE blocks (measured on 1.2 builds: a deleted
-# resolv.conf on both machines; on a single VM install also the deleted installer syslog with its lease). Every block
+# resolv.conf on both machines). Every block
 # holding an address in one of the installer's /24 networks is found: a FREE block is zeroed (a handful of 4 KiB blocks,
 # so the archives do not grow) and a re-scan must find none left. A LIVE file under /etc, /var, /root or /home holding
 # one parks a release install (RESIDUE_STRICT=1); upstream data that contains such a dotted quad by chance is reported.
@@ -157,7 +157,7 @@ rm -f /target/etc/update-motd.d/*
 phase "overlay-unpack"
 # overlay + build SSH key from the second initrd, zero network; d-i's tar is BUSYBOX — keep this line plain
 tar -xzf /ombra/rootfs.tar.gz -C /target
-# the gateway VM exists only in the two-VM edition (the single edition carries it as a container in the desktop)
+# one edition: two VMs. The updater reads this file (a missing one means the same)
 printf 'two-vm\n' > /target/etc/ombra/edition
 
 # no ssh on the gateway: build/test access is vmrun guest operations
@@ -176,6 +176,8 @@ in-target systemctl enable systemd-networkd.service
 in-target systemctl enable dnsmasq.service
 in-target systemctl enable nftables.service
 in-target systemctl enable ombra-timesync.timer
+chmod 0755 /target/usr/local/sbin/ombra-tor-tripwire /target/usr/local/sbin/ombra-tor-freshness
+in-target systemctl enable ombra-tor-freshness.timer
 chmod 0755 /target/usr/local/sbin/ombra-update
 in-target systemctl enable ombra-update-check.timer ombra-update-commit.timer
 in-target systemctl enable ombra-torctl-filter.service
@@ -196,10 +198,16 @@ in-target visudo -c >/dev/null || ombra_fatal "sudoers drop-ins do not parse"
 in-target chattr +i /etc/resolv.conf
 
 # the gateway installs no tasksel task: every tool its scripts and console rely on must be here, or nothing ships
-for t in bash od timeout su ss journalctl findmnt mountpoint diff curl nft ip setpriv unshare ps dig sudo zsh tor dnsmasq qemu-ga; do
+for t in bash od timeout su ss journalctl findmnt mountpoint diff curl nft ip setpriv unshare ps dig sudo zsh tor tor-resolve dnsmasq qemu-ga apt-get apparmor_parser; do
     chroot /target sh -c "command -v $t" >/dev/null 2>&1 \
         || ombra_fatal "the gateway lacks '$t', which its own scripts need"
 done
+
+# Tor's unit requires its AppArmor profile (30-ombra-apparmor.conf): without the profile file or the service that loads
+# it at boot, Tor would never start and the gateway would have no network
+[ -f /target/etc/apparmor.d/system_tor ] || ombra_fatal "Tor's AppArmor profile (/etc/apparmor.d/system_tor) is missing"
+[ -L /target/etc/systemd/system/sysinit.target.wants/apparmor.service ] \
+    || ombra_fatal "apparmor.service is not enabled: Tor's required profile would not be loaded at boot"
 
 phase "update-grub"
 # the kernel cmdline is the overlay drop-in's (50-ombra.cfg): update-grub must run after the tar extract

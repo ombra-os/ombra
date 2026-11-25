@@ -97,6 +97,19 @@ impl Drop for Session {
     }
 }
 
+/// A log line that cannot panic: `eprintln!` panics when stderr is gone, and a panic in a session thread would leave its
+/// reply thread and Tor control connection behind.
+macro_rules! log {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), $($arg)*);
+    }};
+}
+
+/// Local answers a client may queue behind one unanswered Tor reply. Past it the session ends: Tor answers in
+/// microseconds, so only a stalled Tor and a client piling up requests get here.
+const MAX_PENDING: usize = 256;
+
 fn main() -> ExitCode {
     let mut cfg = Config {
         listen: "10.55.10.1:9052".into(),
@@ -124,7 +137,7 @@ fn main() -> ExitCode {
         Ok(l) => l,
         Err(e) => die(&format!("bind {}: {e}", cfg.listen)),
     };
-    eprintln!(
+    log!(
         "ombra-torctl-filter: listening on {} -> {} (read-only dialect)",
         cfg.listen, cfg.upstream
     );
@@ -139,7 +152,7 @@ fn main() -> ExitCode {
 }
 
 fn die(msg: &str) -> ! {
-    eprintln!("ombra-torctl-filter: {msg}");
+    log!("ombra-torctl-filter: {msg}");
     std::process::exit(2);
 }
 
@@ -147,8 +160,9 @@ fn die(msg: &str) -> ! {
 fn handle_incoming(pool: &Arc<ConnectionPool>, stream: TcpStream, cfg: &Config, limits: Limits) {
     if !pool.acquire(limits.max_connections) {
         let mut stream = stream;
-        let _ = stream.write_all(b"551 ombra-filter: too many connections\r\n");
-        eprintln!(
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+        let _ = stream.write_all(format!("{}\r\n", torctl::GatewayState::read().busy_line()).as_bytes());
+        log!(
             "ombra-torctl-filter: connection refused: session cap {} reached",
             limits.max_connections
         );
@@ -171,7 +185,7 @@ fn handle_incoming(pool: &Arc<ConnectionPool>, stream: TcpStream, cfg: &Config, 
             serve(stream, &cfg, &limits);
         });
     if spawned.is_err() {
-        eprintln!("ombra-torctl-filter: connection dropped: cannot spawn a session thread");
+        log!("ombra-torctl-filter: connection dropped: cannot spawn a session thread");
     }
 }
 
@@ -198,10 +212,9 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
     let upstream = match TcpStream::connect(&cfg.upstream) {
         Ok(s) => s,
         Err(e) => {
-            return refuse_close(
-                client,
-                &format!("551 ombra-filter: tor control unreachable ({e})"),
-            )
+            // Tor is down: the refusal carries the gateway's own account of why (crash tripwire, version check)
+            log!("ombra-torctl-filter: tor control unreachable ({e})");
+            return refuse_close(client, &torctl::GatewayState::read().unreachable_line());
         }
     };
     let _ = upstream.set_nodelay(true);
@@ -222,7 +235,11 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
     // break = authenticated; return = client gone, stalled, out of time, or failed the cookie
     loop {
         let left = auth_deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() || client.set_read_timeout(Some(left)).is_err() {
+        // reads AND writes share the one deadline: a client that reads its answers a byte at a time cannot outlive it
+        if left.is_zero()
+            || client.set_read_timeout(Some(left)).is_err()
+            || client.set_write_timeout(Some(left.min(limits.write_timeout))).is_err()
+        {
             return;
         }
         match torctl::read_line_capped(&mut reader, &mut line, limits.line_cap) {
@@ -242,7 +259,7 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
         let (verb, _) = verb_split(cmd);
         match verb {
             "QUIT" => {
-                let _ = upstream_writer.write_all(&line);
+                let _ = upstream_writer.write_all(b"QUIT\r\n");
                 return;
             }
             "PROTOCOLINFO" => {
@@ -259,16 +276,16 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
                     if client.write_all(b"250 OK\r\n").is_err() {
                         return;
                     }
-                    eprintln!("ombra-torctl-filter: {peer} authenticated");
+                    log!("ombra-torctl-filter: {peer} authenticated");
                     break;
                 }
                 let _ = client.write_all(b"515 ombra-filter: authentication failed\r\n");
-                eprintln!("ombra-torctl-filter: {peer} bad cookie");
+                log!("ombra-torctl-filter: {peer} bad cookie");
                 return;
             }
             _ => {
                 let refused = format!("{}\r\n", torctl::refusal(cmd, false));
-                eprintln!("ombra-torctl-filter: {peer} command refused");
+                log!("ombra-torctl-filter: {peer} command refused");
                 if client.write_all(refused.as_bytes()).is_err() {
                     return;
                 }
@@ -277,6 +294,10 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
     }
 
     let _ = client.set_read_timeout(limits.idle_timeout);
+    let _ = client.set_write_timeout(Some(limits.write_timeout));
+    // whatever ends this function (a return, or a panic unwinding), both sockets are shut, so the reply thread ends
+    // and Tor's control connection is released
+    let _guard = ShutdownGuard(try_clone(&upstream), try_clone(&client));
     let mut onion_adds: u32 = 0;
     let out = Arc::new(Mutex::new(ClientOut {
         stream: try_clone(&client),
@@ -306,7 +327,7 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
             })
     };
     let Ok(downstream) = downstream else {
-        eprintln!("ombra-torctl-filter: {peer} dropped: cannot spawn the reply thread");
+        log!("ombra-torctl-filter: {peer} dropped: cannot spawn the reply thread");
         let _ = upstream_writer.shutdown(std::net::Shutdown::Both);
         let _ = client.shutdown(std::net::Shutdown::Both);
         return;
@@ -318,7 +339,7 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
         match torctl::read_line_capped(&mut reader, &mut line, limits.line_cap) {
             Err(torctl::LineReadError::TooLong) => {
                 let _ = out_lock(&out).local(b"510 ombra-filter: line too long\r\n");
-                eprintln!("ombra-torctl-filter: {peer} refused: line too long");
+                log!("ombra-torctl-filter: {peer} refused: line too long");
                 break;
             }
             Err(_) => break,
@@ -339,11 +360,11 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
             match rewritten {
                 Some(f) => {
                     onion_adds += 1;
-                    eprintln!("ombra-torctl-filter: {peer} ADD_ONION accepted");
+                    log!("ombra-torctl-filter: {peer} ADD_ONION accepted");
                     Some(f)
                 }
                 None => {
-                    eprintln!("ombra-torctl-filter: {peer} ADD_ONION refused");
+                    log!("ombra-torctl-filter: {peer} ADD_ONION refused");
                     None
                 }
             }
@@ -352,22 +373,29 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
             match torctl::setevents_plan(rest) {
                 Some(f) => Some(f),
                 None => {
-                    eprintln!(
+                    log!(
                         "ombra-torctl-filter: {peer} command refused: {}",
                         torctl::loggable(cmd)
                     );
                     None
                 }
             }
+        } else if torctl::is_gateway_state_query(cmd, true) {
+            // answered from the gateway's state files; tor never sees the key
+            let reply = torctl::GatewayState::read().getinfo_reply();
+            if out_lock(&out).local(reply.as_bytes()).is_err() {
+                break;
+            }
+            continue;
         } else if let Some(reply) = torctl::stub_reply(cmd, true) {
             if out_lock(&out).local(reply.as_bytes()).is_err() {
                 break;
             }
             continue;
-        } else if torctl::command_allowed(cmd, true) {
-            Some(cmd.to_string())
+        } else if let Some(rebuilt) = torctl::rebuilt_forward(cmd) {
+            Some(rebuilt)
         } else {
-            eprintln!(
+            log!(
                 "ombra-torctl-filter: {peer} command refused: {}",
                 torctl::loggable(cmd)
             );
@@ -381,7 +409,9 @@ fn serve(client: TcpStream, cfg: &Config, limits: &Limits) {
             continue;
         };
         // the slot is reserved before the bytes leave, so the reply can never overtake it
-        out_lock(&out).expect_upstream();
+        if !out_lock(&out).expect_upstream() {
+            break;
+        }
         if upstream_writer
             .write_all(format!("{forward}\r\n").as_bytes())
             .is_err()
@@ -411,13 +441,19 @@ struct ClientOut {
 }
 
 impl ClientOut {
-    fn expect_upstream(&mut self) {
+    fn expect_upstream(&mut self) -> bool {
+        if self.pending.len() >= MAX_PENDING {
+            return false;
+        }
         self.pending.push_back(None);
+        true
     }
 
     fn local(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         if self.pending.is_empty() {
             self.stream.write_all(bytes)
+        } else if self.pending.len() >= MAX_PENDING {
+            Err(std::io::Error::other("too many requests queued behind an unanswered one"))
         } else {
             self.pending.push_back(Some(bytes.to_vec()));
             Ok(())
@@ -437,6 +473,16 @@ impl ClientOut {
             }
         }
         Ok(())
+    }
+}
+
+/// Shuts both sockets of a session when dropped.
+struct ShutdownGuard(TcpStream, TcpStream);
+
+impl Drop for ShutdownGuard {
+    fn drop(&mut self) {
+        let _ = self.0.shutdown(std::net::Shutdown::Both);
+        let _ = self.1.shutdown(std::net::Shutdown::Both);
     }
 }
 
@@ -477,7 +523,7 @@ fn try_clone(s: &TcpStream) -> TcpStream {
 }
 
 fn refuse_close(mut client: TcpStream, msg: &str) {
-    eprintln!("ombra-torctl-filter: {msg}");
+    log!("ombra-torctl-filter: {msg}");
     let _ = client.write_all(format!("{msg}\r\n").as_bytes());
 }
 

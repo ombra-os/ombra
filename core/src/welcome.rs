@@ -175,7 +175,7 @@ impl Welcome {
             user_flow: SecretFlow::new("password", "repeat password"),
             disk_secret: None,
             user_secret: None,
-            resume_field: SecretField::new("passphrase"),
+            resume_field: SecretField::for_unlock("passphrase"),
             resume_secret: None,
             resuming: false,
             note: None,
@@ -297,7 +297,7 @@ impl Welcome {
                         return Action::StartResume;
                     }
                     FieldEvent::TooShort => {
-                        self.note = Some(("use at least 8 characters".to_string(), Severity::Bad));
+                        self.note = Some(("type your passphrase, then press enter".to_string(), Severity::Bad));
                     }
                     FieldEvent::Edited => self.note = None,
                     FieldEvent::Ignored => {}
@@ -346,6 +346,10 @@ impl Welcome {
         self.disk_secret = None;
         self.user_secret = None;
         self.resume_secret = None;
+        // the entry fields still hold what was typed: wipe them too
+        self.disk_flow.reset();
+        self.user_flow.reset();
+        self.resume_field.clear();
         self.screen = Screen::Rebooting;
         self.note = None;
     }
@@ -567,7 +571,13 @@ impl Applier for SystemApplier {
             .take()
             .ok_or_else(|| anyhow!("chpasswd stdin unavailable"))?;
         // never via argv/env; the line buffer is zeroized on drop
-        let line = SecretBuf::new(format!("{username}:{}\n", password.expose()));
+        // built at its final size, so no shorter copy of the password is left behind by a growing buffer
+        let mut text = String::with_capacity(username.len() + password.expose().len() + 2);
+        text.push_str(username);
+        text.push(':');
+        text.push_str(password.expose());
+        text.push('\n');
+        let line = SecretBuf::new(text);
         stdin.write_all(line.as_bytes())?;
         drop(stdin);
         drop(line);
@@ -1060,13 +1070,58 @@ fn resolve_crypttab_source<'a>(source: &'a str, blkid: &'a str) -> Option<&'a st
     }
 }
 
-/// The blkid device line carrying `UUID="<uuid>"` — resolves crypttab UUID= sources.
+/// The one blkid device that is a LUKS container with exactly this UUID — resolves crypttab UUID= sources.
+/// The token must be ` UUID="…"` itself (not PARTUUID or PTUUID, which end the same way) on a `TYPE="crypto_LUKS"`
+/// line, and it must be the only such device: two devices claiming the root disk's UUID (a second disk attached with a
+/// copied header) resolve to nothing, and the caller fails closed.
 pub fn blkid_device_with_uuid<'a>(blkid: &'a str, uuid: &str) -> Option<&'a str> {
     let quoted = format!("UUID=\"{uuid}\"");
-    blkid.lines().find_map(|line| {
+    let mut hits = blkid.lines().filter_map(|line| {
         let (dev, rest) = line.split_once(':')?;
-        rest.contains(&quoted).then_some(dev.trim())
-    })
+        let mut tokens = rest.split_whitespace();
+        let is_luks = rest.split_whitespace().any(|t| t == "TYPE=\"crypto_LUKS\"");
+        (is_luks && tokens.any(|t| t == quoted)).then_some(dev.trim())
+    });
+    let first = hits.next()?;
+    hits.next().is_none().then_some(first)
+}
+
+/// Whether `resolved` (from crypttab and blkid) is the device the kernel says the mapping sits on. `leaves` are the
+/// non-device-mapper devices found under the mapping: exactly one, and it must be the resolved device.
+pub fn is_backing_device(resolved: &str, leaves: &[String]) -> bool {
+    let name = resolved.rsplit('/').next().unwrap_or("");
+    !name.is_empty() && leaves.len() == 1 && leaves[0] == name
+}
+
+/// The kernel's own record of what a device-mapper mapping sits on: the real (non-dm) devices at the bottom of its
+/// stack. An online re-encryption puts helper mappings between the two, so the walk goes all the way down.
+fn mapping_slaves(mapping: &str) -> Result<Vec<String>> {
+    let dm = fs::canonicalize(format!("/dev/mapper/{mapping}"))
+        .with_context(|| format!("resolving /dev/mapper/{mapping}"))?;
+    let top = dm
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| n.starts_with("dm-"))
+        .ok_or_else(|| anyhow!("/dev/mapper/{mapping} is not a device-mapper device"))?
+        .to_string();
+    let mut leaves: Vec<String> = Vec::new();
+    let mut todo = vec![top];
+    let mut seen = 0usize;
+    while let Some(dev) = todo.pop() {
+        seen += 1;
+        ensure!(seen <= 64, "the device stack under {mapping} is too deep");
+        for e in fs::read_dir(format!("/sys/block/{dev}/slaves"))
+            .with_context(|| format!("reading the devices under {dev}"))?
+        {
+            let name = e?.file_name().to_string_lossy().into_owned();
+            if name.starts_with("dm-") {
+                todo.push(name);
+            } else if !leaves.contains(&name) {
+                leaves.push(name);
+            }
+        }
+    }
+    Ok(leaves)
 }
 
 struct RootLuks {
@@ -1086,9 +1141,22 @@ fn discover_luks() -> Result<RootLuks> {
         "blkid failed: {}",
         String::from_utf8_lossy(&out.stderr).trim()
     );
-    resolve_root_luks_mapping(&crypttab, &ancestry, &String::from_utf8_lossy(&out.stdout))
+    let found = resolve_root_luks_mapping(&crypttab, &ancestry, &String::from_utf8_lossy(&out.stdout))
         .map(|(mapping, device)| RootLuks { mapping, device })
-        .ok_or_else(|| anyhow!("no crypttab LUKS target on root's device-mapper ancestry"))
+        .ok_or_else(|| anyhow!("no crypttab LUKS target on root's device-mapper ancestry"))?;
+    // the device named by crypttab and blkid must be the one the open mapping really sits on: every later step
+    // (testing the build key, adding the user's key, re-encrypting) acts on this path
+    let real = fs::canonicalize(&found.device)
+        .with_context(|| format!("resolving {}", found.device))?
+        .to_string_lossy()
+        .into_owned();
+    ensure!(
+        is_backing_device(&real, &mapping_slaves(&found.mapping)?),
+        "{} is not the device behind the open disk ({})",
+        found.device,
+        found.mapping
+    );
+    Ok(found)
 }
 
 /// dm names behind the device mounted on / — a crypttab target must be among them.
@@ -1594,12 +1662,13 @@ mod tests {
     fn the_resume_screen_collects_one_passphrase_and_returns_on_failure() {
         let mut app = Welcome::resuming();
         assert_eq!(app.screen(), Screen::Resume);
-        type_into(&mut app, "short");
+        // entering an existing passphrase has no length rule; only an empty field is turned away
         assert_eq!(app.on_key(key(KeyCode::Enter)), Action::None);
         assert_eq!(
             app.note(),
-            Some(("use at least 8 characters", Severity::Bad))
+            Some(("type your passphrase, then press enter", Severity::Bad))
         );
+        type_into(&mut app, "short");
         for _ in 0..5 {
             app.on_key(key(KeyCode::Backspace));
         }
@@ -2028,6 +2097,32 @@ vg0-swap [SWAP]
         let ancestry = dm_ancestors(LIVE_DM_TREE, "vg0-root");
         let dev = resolve_root_luks(LIVE_CRYPTTAB, &ancestry, TWO_LUKS_BLKID).unwrap();
         assert_eq!(dev, "/dev/nvme0n1p4");
+    }
+
+    #[test]
+    fn a_copied_uuid_on_a_second_disk_resolves_to_nothing() {
+        let uuid = "8f32ab90-dead-beef-cafe-1234567890ab";
+        // exactly one LUKS device with the UUID: found
+        assert_eq!(blkid_device_with_uuid(TWO_LUKS_BLKID, uuid), Some("/dev/nvme0n1p4"));
+        // a second device claiming it: nothing, the caller fails closed
+        let dup = format!("/dev/vda: UUID=\"{uuid}\" TYPE=\"crypto_LUKS\"\n{TWO_LUKS_BLKID}");
+        assert_eq!(blkid_device_with_uuid(&dup, uuid), None);
+        // the same characters as a PARTUUID or PTUUID, or on a non-LUKS device, do not count
+        let part = format!("/dev/vda1: PARTUUID=\"{uuid}\" TYPE=\"crypto_LUKS\"\n");
+        assert_eq!(blkid_device_with_uuid(&part, uuid), None);
+        let pt = format!("/dev/vda: PTUUID=\"{uuid}\" PTTYPE=\"gpt\"\n");
+        assert_eq!(blkid_device_with_uuid(&pt, uuid), None);
+        let ext = format!("/dev/vda1: UUID=\"{uuid}\" TYPE=\"ext4\"\n");
+        assert_eq!(blkid_device_with_uuid(&ext, uuid), None);
+    }
+
+    #[test]
+    fn the_resolved_device_must_be_the_one_under_the_open_mapping() {
+        assert!(is_backing_device("/dev/nvme0n1p4", &["nvme0n1p4".to_string()]));
+        assert!(!is_backing_device("/dev/vda", &["nvme0n1p4".to_string()]));
+        assert!(!is_backing_device("/dev/nvme0n1p4", &[]));
+        assert!(!is_backing_device("/dev/nvme0n1p4", &["nvme0n1p4".to_string(), "vda".to_string()]));
+        assert!(!is_backing_device("", &["".to_string()]));
     }
 
     #[test]

@@ -16,6 +16,7 @@ cp target/aarch64-unknown-linux-musl/release/ombra-askpass \
    target/aarch64-unknown-linux-musl/release/ombra \
    target/aarch64-unknown-linux-musl/release/ombra-statusd \
    target/aarch64-unknown-linux-musl/release/ombra-torctl-filter \
+   target/aarch64-unknown-linux-musl/release/ombra-tproxy \
    dist/aarch64/
 
 ls -l dist/aarch64

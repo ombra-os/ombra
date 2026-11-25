@@ -153,6 +153,9 @@ impl DownstreamFilter {
             }
             Some(ev @ ("STATUS_SERVER" | "STATUS_CLIENT" | "STATUS_GENERAL")) => {
                 let tail = rest.trim_start().strip_prefix(ev).unwrap_or("");
+                if status_is_bug(tail) {
+                    return None;
+                }
                 Some(
                     format!("650 {ev} {}", scrub_status_args(tail))
                         .trim_end()
@@ -213,13 +216,55 @@ pub fn scrub_status_args(args: &str) -> String {
     tokens
         .into_iter()
         .filter(|t| match t.split_once('=') {
-            Some((k, _)) => STATUS_KEYS_ALLOWED.contains(&k),
+            Some((k, v)) => STATUS_KEYS_ALLOWED.contains(&k) && status_value_ok(k, v),
             None => t
                 .bytes()
                 .all(|b| b.is_ascii_uppercase() || b == b'_' || b.is_ascii_digit()),
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Whether the value of an allowed status key has the shape that key has in Tor's own status events. The key name
+/// alone is not enough: Tor reports its internal "BUG" log lines as `REASON="<the log text>"`, and that text can name
+/// the entry guard or carry a backtrace with the addresses the Tor process is loaded at.
+pub fn status_value_ok(key: &str, value: &str) -> bool {
+    let word = |v: &str, max: usize| {
+        !v.is_empty() && v.len() <= max && v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    };
+    let digits = |v: &str, max: usize| !v.is_empty() && v.len() <= max && v.bytes().all(|b| b.is_ascii_digit());
+    let unquoted = |v: &str| -> Option<String> {
+        let inner = v.strip_prefix('"')?.strip_suffix('"')?;
+        (!inner.contains(['"', '\\'])).then(|| inner.to_string())
+    };
+    match key {
+        "PROGRESS" | "COUNT" => digits(value, 6),
+        "SKEW" => digits(value.strip_prefix('-').unwrap_or(value), 12),
+        "TAG" | "REASON" | "RECOMMENDATION" => word(value, 48),
+        // a version, or a quoted list of versions
+        "CURRENT" | "RECOMMENDED" => {
+            let v = unquoted(value).unwrap_or_else(|| value.to_string());
+            !v.is_empty()
+                && v.len() <= 1024
+                && !value.contains('\\')
+                && v.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b',' | b' '))
+        }
+        // a short English phrase: letters, spaces and light punctuation. No digits, so no address, fingerprint, port
+        // or memory address fits
+        "SUMMARY" | "WARNING" => unquoted(value).is_some_and(|v| {
+            !v.is_empty()
+                && v.len() <= 120
+                && v.bytes()
+                    .all(|b| b.is_ascii_alphabetic() || matches!(b, b' ' | b'.' | b',' | b':' | b'\'' | b'-' | b'(' | b')'))
+        }),
+        _ => false,
+    }
+}
+
+/// A status line whose action word is BUG is Tor reporting one of its own internal errors; none of it is for the desktop.
+pub fn status_is_bug(args: &str) -> bool {
+    args.split_whitespace().nth(1) == Some("BUG")
 }
 
 /// A SETEVENTS line made only of known events, as the line to send upstream: the stubbed ones are dropped (the client is
@@ -427,15 +472,36 @@ fn verb_of(line: &str) -> (&str, &str) {
 
 /// `authed` gates the pre-auth surface: only PROTOCOLINFO, AUTHENTICATE and QUIT exist before AUTHENTICATE succeeds.
 pub fn command_allowed(line: &str, authed: bool) -> bool {
+    // printable ASCII only: no control byte and no non-ASCII character is part of any command this dialect knows
+    if !line.bytes().all(|b| (0x20..0x7f).contains(&b)) {
+        return false;
+    }
     let (verb, rest) = verb_of(line);
     match verb {
-        "QUIT" | "PROTOCOLINFO" => true,
+        "QUIT" => rest.is_empty(),
+        "PROTOCOLINFO" => true,
         "AUTHENTICATE" => true,
         "GETINFO" => authed && getinfo_allowed(rest),
         "GETCONF" => authed && getconf_allowed(rest),
         "DEL_ONION" => authed && del_onion_allowed(rest),
         "SETEVENTS" => authed && setevents_allowed(rest),
         _ => false,
+    }
+}
+
+/// The line that goes to Tor for an allowed GETINFO, GETCONF, DEL_ONION or QUIT: rebuilt from its verb and tokens, so
+/// Tor never parses the client's own bytes (its tokenizer and this one need not agree on what separates words).
+/// `None` for any other verb, or a line that is not allowed.
+pub fn rebuilt_forward(line: &str) -> Option<String> {
+    if !command_allowed(line, true) {
+        return None;
+    }
+    let (verb, rest) = verb_of(line);
+    match verb {
+        "GETINFO" | "GETCONF" => Some(format!("{verb} {}", rest.split_whitespace().collect::<Vec<_>>().join(" "))),
+        "DEL_ONION" => Some(format!("DEL_ONION {}", rest.trim())),
+        "QUIT" => Some("QUIT".to_string()),
+        _ => None,
     }
 }
 
@@ -531,6 +597,110 @@ pub fn read_line_capped<R: BufRead + ?Sized>(
     }
 }
 
+/// Where the gateway's own scripts leave Tor's health: the crash tripwire (`ombra-tor-tripwire`) and the daily version
+/// check (`ombra-tor-freshness`). Root writes, everyone reads; cleared by a gateway restart.
+pub const GATEWAY_STATE_DIR: &str = "/run/ombra";
+/// The one GETINFO key the filter answers about the gateway itself. Tor never sees it.
+pub const GATEWAY_STATE_KEY: &str = "ombra/gateway-state";
+
+/// What the desktop may know about the gateway's Tor: how often it died unexpectedly in this boot, whether its
+/// system-call filter killed it, and whether Debian has a newer Tor. Three small values, rebuilt here from the state
+/// files; no byte of a file is ever passed through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct GatewayState {
+    /// Unexpected deaths this boot, capped at 9.
+    pub crashes: u8,
+    pub killed: bool,
+    pub update: bool,
+}
+
+impl GatewayState {
+    /// `crashes` is the text of the counter file, `killed` whether the kill marker exists, `update` the text of the
+    /// version-check file. Anything unreadable or malformed counts as nothing to report.
+    pub fn from_files(crashes: Option<&str>, killed: bool, update: Option<&str>) -> GatewayState {
+        let crashes = crashes
+            .map(str::trim)
+            .filter(|t| !t.is_empty() && t.len() <= 6 && t.bytes().all(|b| b.is_ascii_digit()))
+            .and_then(|t| t.parse::<u32>().ok())
+            .map_or(0, |n| n.min(9) as u8);
+        let update = update.and_then(|t| t.lines().next()).map(str::trim) == Some("available");
+        GatewayState {
+            crashes,
+            killed,
+            update,
+        }
+    }
+
+    pub fn read() -> GatewayState {
+        let dir = std::path::Path::new(GATEWAY_STATE_DIR);
+        let text = |name: &str| std::fs::read_to_string(dir.join(name)).ok();
+        GatewayState::from_files(
+            text("tor-crashes").as_deref(),
+            dir.join("tor-killed").exists(),
+            text("tor-update").as_deref(),
+        )
+    }
+
+    /// `crashes:N,killed:B,update:B` — digits, lowercase letters, colons and commas only.
+    pub fn token(self) -> String {
+        format!(
+            "crashes:{},killed:{},update:{}",
+            self.crashes,
+            u8::from(self.killed),
+            u8::from(self.update)
+        )
+    }
+
+    /// The reverse of `token`, for the desktop side; `None` for anything that is not exactly that shape.
+    pub fn parse_token(token: &str) -> Option<GatewayState> {
+        let mut parts = token.split(',');
+        let field = |part: Option<&str>, name: &str| -> Option<u8> {
+            let v = part?.strip_prefix(name)?.strip_prefix(':')?;
+            (v.len() == 1 && v.as_bytes()[0].is_ascii_digit()).then(|| v.as_bytes()[0] - b'0')
+        };
+        let crashes = field(parts.next(), "crashes")?;
+        let killed = field(parts.next(), "killed")?;
+        let update = field(parts.next(), "update")?;
+        if parts.next().is_some() || killed > 1 || update > 1 {
+            return None;
+        }
+        Some(GatewayState {
+            crashes,
+            killed: killed == 1,
+            update: update == 1,
+        })
+    }
+
+    /// The local answer to `GETINFO ombra/gateway-state`.
+    pub fn getinfo_reply(self) -> String {
+        format!("250-{GATEWAY_STATE_KEY}={}\r\n250 OK\r\n", self.token())
+    }
+
+    /// The line a client gets when every session slot is taken: the state still rides along, so the desktop's notice
+    /// about Tor does not depend on a free slot.
+    pub fn busy_line(self) -> String {
+        format!(
+            "551 ombra-filter: too many connections gateway-state={}",
+            self.token()
+        )
+    }
+
+    /// The line a client gets when Tor's control port cannot be reached: Tor is down, and this is the only moment the
+    /// desktop can learn why, so the state rides on the refusal.
+    pub fn unreachable_line(self) -> String {
+        format!(
+            "551 ombra-filter: tor control unreachable gateway-state={}",
+            self.token()
+        )
+    }
+}
+
+/// `GETINFO ombra/gateway-state`, alone on the line and after authentication.
+pub fn is_gateway_state_query(line: &str, authed: bool) -> bool {
+    let (verb, rest) = verb_of(line);
+    authed && verb == "GETINFO" && rest == GATEWAY_STATE_KEY
+}
+
 /// Reason strings for refusal lines; the client sees these verbatim.
 pub fn refusal(line: &str, authed: bool) -> &'static str {
     let (verb, _) = verb_of(line);
@@ -544,6 +714,118 @@ pub fn refusal(line: &str, authed: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gateway_state_is_rebuilt_from_the_files_never_passed_through() {
+        let none = GatewayState::from_files(None, false, None);
+        assert_eq!(none, GatewayState::default());
+        assert_eq!(none.token(), "crashes:0,killed:0,update:0");
+        let s = GatewayState::from_files(Some("1\n"), false, Some("available\n"));
+        assert_eq!(s.token(), "crashes:1,killed:0,update:1");
+        assert_eq!(GatewayState::from_files(Some("2"), true, Some("current")).token(), "crashes:2,killed:1,update:0");
+        // a huge or hostile counter is capped or ignored; file text never reaches the reply
+        assert_eq!(GatewayState::from_files(Some("400"), false, None).crashes, 9);
+        for bad in ["", " ", "-1", "1 2", "1\r\n250 OK", "9999999", "one", "1,killed:1"] {
+            assert_eq!(GatewayState::from_files(Some(bad), false, None).crashes, 0, "{bad:?}");
+        }
+        for bad in ["", "AVAILABLE", "available now", "current\navailable", "250 OK"] {
+            assert!(!GatewayState::from_files(None, false, Some(bad)).update, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn gateway_state_token_round_trips_and_rejects_other_shapes() {
+        for (c, k, u) in [(0, false, false), (1, false, true), (9, true, true), (2, true, false)] {
+            let s = GatewayState { crashes: c, killed: k, update: u };
+            assert_eq!(GatewayState::parse_token(&s.token()), Some(s));
+            assert!(s.token().bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b':' || b == b','));
+        }
+        for bad in [
+            "", "crashes:1", "crashes:1,killed:0", "crashes:10,killed:0,update:0", "crashes:1,killed:2,update:0",
+            "crashes:1,killed:0,update:0,extra:1", "killed:0,crashes:1,update:0", "crashes:a,killed:0,update:0",
+            "crashes:1,killed:0,update:0 ", "CRASHES:1,killed:0,update:0",
+        ] {
+            assert_eq!(GatewayState::parse_token(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn gateway_state_query_is_exact_and_needs_authentication() {
+        assert!(is_gateway_state_query("GETINFO ombra/gateway-state", true));
+        assert!(!is_gateway_state_query("GETINFO ombra/gateway-state", false));
+        assert!(!is_gateway_state_query("GETINFO ombra/gateway-state version", true));
+        assert!(!is_gateway_state_query("GETINFO version ombra/gateway-state", true));
+        assert!(!is_gateway_state_query("GETCONF ombra/gateway-state", true));
+        // it is answered here and never forwarded: Tor does not know the key, and the allowlist does not carry it
+        assert!(!command_allowed("GETINFO ombra/gateway-state", true));
+        let s = GatewayState { crashes: 1, killed: false, update: true };
+        assert_eq!(s.getinfo_reply(), "250-ombra/gateway-state=crashes:1,killed:0,update:1\r\n250 OK\r\n");
+        assert_eq!(
+            s.unreachable_line(),
+            "551 ombra-filter: tor control unreachable gateway-state=crashes:1,killed:0,update:1"
+        );
+    }
+
+    #[test]
+    fn tors_internal_bug_reports_never_reach_the_desktop() {
+        let mut f = DownstreamFilter::new();
+        // a backtrace frame: the addresses the Tor process is loaded at
+        let bt = "650 STATUS_GENERAL WARN BUG REASON=\"    /usr/bin/tor(+0x1a2b) [0x55d0c0de1a2b]\"\r\n";
+        assert!(f.feed_lines(bt.as_bytes()).is_empty());
+        // a guard named in a BUG notice
+        let guard = "650 STATUS_GENERAL NOTICE BUG REASON=\"Unexpectedly high successes counts (10.0/9.0) for guard $ABCDEF0123456789ABCDEF0123456789ABCDEF01~nick ($ABCD...)\"\r\n";
+        assert!(f.feed_lines(guard.as_bytes()).is_empty());
+        // and even outside a BUG line, a REASON that is not one word is dropped from the line
+        let odd = scrub_status_args("WARN SOMETHING REASON=\"text with 0x55d0 and $FP~nick\" COUNT=3");
+        assert_eq!(odd, "WARN SOMETHING COUNT=3");
+    }
+
+    #[test]
+    fn status_values_must_have_their_keys_shape() {
+        // what Tor really sends passes unchanged
+        let boot = "NOTICE BOOTSTRAP PROGRESS=14 TAG=handshake SUMMARY=\"Handshaking with a relay\"";
+        assert_eq!(scrub_status_args(boot), boot);
+        let warn = "WARN BOOTSTRAP PROGRESS=10 TAG=conn_done SUMMARY=\"Connected to a relay\" WARNING=\"No route to host\" REASON=NOROUTE COUNT=4 RECOMMENDATION=warn";
+        assert_eq!(scrub_status_args(warn), warn);
+        assert_eq!(scrub_status_args("NOTICE CLOCK_SKEW SKEW=-3600"), "NOTICE CLOCK_SKEW SKEW=-3600");
+        let ver = "WARN DANGEROUS_VERSION CURRENT=0.4.9.11 REASON=OBSOLETE RECOMMENDED=\"0.4.9.15,0.4.9.16\"";
+        assert_eq!(scrub_status_args(ver), ver);
+        for (k, v, ok) in [
+            ("PROGRESS", "100", true), ("PROGRESS", "1e9", false), ("PROGRESS", "", false), ("COUNT", "1234567", false),
+            ("SKEW", "--1", false), ("SKEW", "12", true),
+            ("REASON", "NOROUTE", true), ("REASON", "\"NOROUTE\"", false), ("REASON", "a b", false), ("TAG", "conn-done", false),
+            ("SUMMARY", "Done", false), ("SUMMARY", "\"Done\"", true), ("SUMMARY", "\"relay at 1.2.3.4\"", false),
+            ("WARNING", "\"$FP~nick\"", false), ("WARNING", "\"[0x55d0]\"", false), ("WARNING", "\"a\\\"b\"", false),
+            ("CURRENT", "0.4.9.15", true), ("CURRENT", "0.4.9.15 (git-abc)", false), ("RECOMMENDED", "\"0.4.9.15, 0.5.1.2-alpha\"", true),
+            ("HOSTADDR", "1.2.3.4", false),
+        ] {
+            assert_eq!(status_value_ok(k, v), ok, "{k}={v}");
+        }
+        let long = format!("\"{}\"", "a".repeat(121));
+        assert!(!status_value_ok("SUMMARY", &long));
+    }
+
+    #[test]
+    fn forwarded_commands_are_rebuilt_never_the_clients_bytes() {
+        assert_eq!(rebuilt_forward("GETINFO version").as_deref(), Some("GETINFO version"));
+        assert_eq!(
+            rebuilt_forward("GETINFO  status/bootstrap-phase   status/circuit-established ").as_deref(),
+            Some("GETINFO status/bootstrap-phase status/circuit-established")
+        );
+        assert_eq!(rebuilt_forward("GETCONF HiddenServiceSingleHopMode").as_deref(), Some("GETCONF HiddenServiceSingleHopMode"));
+        let id = "a".repeat(56);
+        assert_eq!(rebuilt_forward(&format!("DEL_ONION {id}")), Some(format!("DEL_ONION {id}")));
+        assert_eq!(rebuilt_forward("QUIT").as_deref(), Some("QUIT"));
+        // QUIT carries nothing; no control byte or non-ASCII character is in any allowed line
+        assert!(!command_allowed("QUIT now", true));
+        assert!(!command_allowed("QUIT \u{0}", true));
+        for bad in ["GETINFO version\rnet/listeners/socks", "GETINFO version\u{a0}onions/current", "GETINFO versi\u{f6}n", "QUIT\t"] {
+            assert!(!command_allowed(bad, true), "{bad:?}");
+            assert_eq!(rebuilt_forward(bad), None, "{bad:?}");
+        }
+        assert_eq!(rebuilt_forward("SETCONF x=1"), None);
+        assert_eq!(rebuilt_forward("GETINFO address"), None);
+    }
 
     #[test]
     fn chomp_strips_lf_and_crlf() {

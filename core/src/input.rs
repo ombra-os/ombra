@@ -89,6 +89,8 @@ pub struct SecretField {
     placeholder: &'static str,
     /// Caret blink phase; only consulted while the field is empty.
     caret_on: bool,
+    /// Shortest input Enter accepts: MIN_LEN when a passphrase is being chosen, 1 when one is being entered.
+    min_len: usize,
 }
 
 impl SecretField {
@@ -97,6 +99,17 @@ impl SecretField {
             value: SecretBuf::with_capacity(MAX_LEN),
             placeholder,
             caret_on: true,
+            min_len: MIN_LEN,
+        }
+    }
+
+    /// A field for ENTERING an existing passphrase (disk unlock, resume): any non-empty input may be submitted. The
+    /// 8-character rule belongs to choosing a passphrase; applied to unlocking, it would make a disk whose passphrase
+    /// was set shorter by other means impossible to open.
+    pub fn for_unlock(placeholder: &'static str) -> Self {
+        SecretField {
+            min_len: 1,
+            ..SecretField::new(placeholder)
         }
     }
 
@@ -127,7 +140,7 @@ impl SecretField {
     pub fn handle_key(&mut self, key: KeyEvent) -> FieldEvent {
         match key.code {
             KeyCode::Enter => {
-                if self.len() < MIN_LEN {
+                if self.len() < self.min_len {
                     FieldEvent::TooShort
                 } else {
                     FieldEvent::Submitted
@@ -347,7 +360,11 @@ pub enum EscState {
     #[default]
     Idle,
     Esc,
+    /// Just after `ESC [`: a second `[` here is the Linux console's function-key form (`ESC [ [ A`..`E`).
+    CsiStart,
     Csi,
+    /// After `ESC [ [`: exactly one more byte belongs to the sequence.
+    LinuxFn,
 }
 
 impl EscState {
@@ -360,13 +377,23 @@ impl EscState {
             EscState::Idle => byte_to_key(b),
             EscState::Esc => {
                 *self = match b {
-                    b'[' | b'O' => EscState::Csi,
+                    b'[' => EscState::CsiStart,
+                    b'O' => EscState::Csi,
                     0x1b => EscState::Esc,
                     _ => EscState::Idle,
                 };
                 None
             }
-            EscState::Csi => {
+            EscState::CsiStart if b == b'[' => {
+                *self = EscState::LinuxFn;
+                None
+            }
+            EscState::LinuxFn => {
+                *self = EscState::Idle;
+                None
+            }
+            EscState::CsiStart | EscState::Csi => {
+                *self = EscState::Csi;
                 if (0x40..=0x7e).contains(&b) {
                     *self = EscState::Idle;
                 }
@@ -1152,5 +1179,36 @@ mod tests {
         let start = Instant::now();
         assert_eq!(kr.next_key(Duration::from_millis(60)).unwrap(), None);
         assert!(start.elapsed() < Duration::from_secs(2));
+    }
+    #[test]
+    fn an_unlock_field_takes_any_non_empty_passphrase() {
+        let mut f = SecretField::for_unlock("passphrase");
+        assert_eq!(f.handle_key(key(KeyCode::Enter)), FieldEvent::TooShort, "empty is still refused");
+        f.handle_key(key(KeyCode::Char('x')));
+        assert_eq!(f.handle_key(key(KeyCode::Enter)), FieldEvent::Submitted);
+        // choosing a passphrase keeps the 8-character rule
+        let mut c = SecretField::new("passphrase");
+        for ch in "1234567".chars() {
+            c.handle_key(key(KeyCode::Char(ch)));
+        }
+        assert_eq!(c.handle_key(key(KeyCode::Enter)), FieldEvent::TooShort);
+    }
+
+    #[test]
+    fn linux_console_function_keys_leave_no_stray_letter() {
+        // F1..F5 arrive as ESC [ [ A..E: the final letter must not become text
+        for last in *b"ABCDE" {
+            let mut st = EscState::default();
+            let out: Vec<_> = [0x1b, b'[', b'[', last, b'z'].iter().filter_map(|b| st.feed(*b)).collect();
+            assert_eq!(out.len(), 1, "only the z after the sequence is a key");
+            assert_eq!(out[0].code, KeyCode::Char('z'));
+        }
+        // ordinary CSI sequences still end at their final byte
+        let mut st = EscState::default();
+        let out: Vec<_> = [0x1b, b'[', b'1', b'5', b'~', b'q'].iter().filter_map(|b| st.feed(*b)).collect();
+        assert_eq!(out.len(), 1);
+        let mut st = EscState::default();
+        let out: Vec<_> = [0x1b, b'[', b'A', b'q'].iter().filter_map(|b| st.feed(*b)).collect();
+        assert_eq!(out.len(), 1);
     }
 }

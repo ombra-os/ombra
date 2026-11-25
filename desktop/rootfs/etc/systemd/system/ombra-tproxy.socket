@@ -1,0 +1,14 @@
+[Unit]
+Description=Ports of the Ombra transparent proxy, held by systemd
+# systemd owns both ports from early boot until shutdown: while ombra-tproxy.service is stopped, restarting or being
+# updated, no other program can bind them and receive the traffic the firewall redirects there. Redirected traffic
+# simply waits in the queue until the service is back.
+
+[Socket]
+ListenDatagram=127.0.0.1:5399
+ListenStream=127.0.0.1:9041
+Backlog=256
+Service=ombra-tproxy.service
+
+[Install]
+WantedBy=sockets.target

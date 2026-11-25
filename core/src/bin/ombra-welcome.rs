@@ -18,6 +18,7 @@ const POLL: Duration = Duration::from_millis(80);
 const RESTART_NOTICE: Duration = Duration::from_millis(1500);
 
 fn main() -> ExitCode {
+    ombra_boot::no_core_dumps();
     term::install_panic_hook();
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--probe") {

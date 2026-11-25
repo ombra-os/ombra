@@ -1,5 +1,5 @@
 # Electrum (Bitcoin) — upstream release tarball; runs from /opt/electrum on the system's Python, Qt 6, cryptography
-# and libsecp256k1 (Debian trixie). Installed through Update Ombra's app updates, not built into the images.
+# and libsecp256k1 (Debian trixie). Built into the desktop image; Update Ombra's app updates replace it.
 # Provenance: Electrum-4.8.4.tar.gz.asc verified on 2026-11-18 against the release keys published in the Electrum
 # repository (pubkeys/): Thomas Voegtlin 6694D8DE7BE8EE5631BED9502BD5824B7F9470E6 and SomberNight
 # 0EEDCFD5CAFB459067349B23CA9EEEC43DF911DC (good signatures from both).

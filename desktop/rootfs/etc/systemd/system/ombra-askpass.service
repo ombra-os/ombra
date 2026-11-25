@@ -5,6 +5,8 @@ Description=Ombra ask-passphrase agent
 After=systemd-user-sessions.service ombra-welcome.service
 
 [Service]
+# these hold the disk passphrase in memory: never a core dump
+LimitCORE=0
 ExecStart=/usr/local/libexec/ombra/ombra-askpass
 Restart=on-failure
 RestartSec=3

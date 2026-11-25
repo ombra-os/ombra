@@ -28,6 +28,10 @@ path = "src/bin/ombra-statusd.rs"
 name = "ombra-torctl-filter"
 path = "src/bin/ombra-torctl-filter.rs"
 
+[[bin]]
+name = "ombra-tproxy"
+path = "src/bin/ombra-tproxy.rs"
+
 # Pure-Rust deps only, so the initramfs binary can link musl-static.
 [dependencies]
 libc = "0.2"

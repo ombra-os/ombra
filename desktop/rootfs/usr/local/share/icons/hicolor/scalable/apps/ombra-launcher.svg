@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+<!-- Ombra application-launcher icon: the Ombra mark (ring, slash, lower-left block) redrawn
+     from ombra-logo.svg's geometry for 22-48 px: same ring proportions and slash angle,
+     with the slash and the cuts widened so they survive at dock size. Light mark (#f4f3ef)
+     on transparent for the dark Colloid-dark dock. Plain paths only (no mask/clip) so QtSvg
+     renders it exactly. -->
+<path transform="translate(64 64) rotate(-34.8)" fill="#f4f3ef" d="M-53.48 -7.5A54 54 0 0 1 49.75 -21L32.86 -21A39 39 0 0 0 -38.27 -7.5ZM-52.53 -12.5L52.53 -12.5A54 54 0 0 1 53.48 -7.5L-53.48 -7.5A54 54 0 0 1 -52.53 -12.5ZM53.48 -7.5A54 54 0 0 1 -50.55 19L-34.06 19A39 39 0 0 0 38.27 -7.5ZM-38.99 -1L-53.99 -1A54 54 0 0 0 -52.65 12L-37.11 12A39 39 0 0 1 -38.99 -1Z"/>
+</svg>

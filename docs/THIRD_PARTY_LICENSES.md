@@ -3,24 +3,22 @@
 The packages and assets below ship in the images. Everything is either
 a Debian trixie package taken from the live suite at build time (every
 version recorded in `/usr/share/ombra/packages.txt` on each machine) or
-pinned by sha256 or tag/commit with its hash recorded. The two-VM release
-archives download no software at install or boot; the single VM installer
-ISO downloads its Debian packages from Debian during the install (the
-pinned files travel inside the ISO); at runtime the machines fetch
+pinned by sha256 or tag/commit with its hash recorded. The release
+archives download no software at install or boot; at runtime the machines fetch
 only what the [threat model](THREAT_MODEL.md#designed-runtime-probes)
-lists, and new software arrives only as a signed Ombra update the user
-applies. Full license texts are embedded in each upstream
+lists, and new software arrives only as a signed Ombra update or app
+update the user starts. Full license texts are embedded in each upstream
 archive and installed on the images alongside the software; vendored
 license copies live in `desktop/rootfs/usr/share/ombra-assets/`.
 
 | Component | Version/commit | License | Pin / provenance |
 |---|---|---|---|
-| Debian | trixie (13.7.0 netinst) | DFSG-free aggregate | build/pins/debian-netinst-arm64.txt |
-| Tor Browser (stable channel, linux-aarch64) | 16.0.1 | MPL-2.0 (+ bundled licenses in the browser directory) | build/pins/torbrowser.txt |
+| Debian | trixie (13.8.0 netinst) | DFSG-free aggregate | build/pins/debian-netinst-arm64.txt |
+| Tor Browser (stable channel, linux-aarch64) | 16.0.3 | MPL-2.0 (+ bundled licenses in the browser directory) | build/pins/torbrowser.txt |
+| Electrum (upstream release tarball in `/opt/electrum`; sha256 pin checked at build, upstream signature checked by the maintainer when the pin was made) | 4.8.4 | MIT | build/pins/electrum.txt |
 | Feather Wallet (AppImage; sha256 pin checked at build, upstream signature checked by the maintainer when the pin was made) | 2.9.1 | BSD-3-Clause | build/pins/feather.txt |
 | SimpleX Chat (arm64 desktop deb; upstream signs only its x86_64 checksums, so this is a sha256 pin with no upstream signature) | 7.1.4 | AGPL-3.0 | build/pins/simplex.txt |
-| Kleopatra, OnionShare, Electrum, proxychains4 (Debian trixie packages) | trixie | GPL-2.0-or-later, GPL-3.0, MIT, GPL-2.0-or-later | Debian suite |
-| Single VM edition: systemd-container, mmdebstrap and e2fsprogs on the desktop, and the gateway container's packages (tor, dnsmasq, nftables and a minbase system; versions in `/usr/share/ombra/gateway-packages.txt`) | trixie | Debian package licenses (`/usr/share/doc/*/copyright`) | Debian suite, at install time |
+| Kleopatra, OnionShare, Electrum (icon and libraries for the pinned release), proxychains4 (Debian trixie packages) | trixie | GPL-2.0-or-later, GPL-3.0, MIT, GPL-2.0-or-later | Debian suite |
 | qemu-guest-agent, spice-vdagent (Debian trixie packages; UTM/QEMU guest tools, locked down by `/etc/qemu/qemu-ga.conf`) | trixie | GPL-2.0-or-later, GPL-3.0-or-later | Debian suite |
 | Colloid-kde (look-and-feel, desktop theme, aurorae, color scheme, Kvantum, SDDM greeter) | commit `b768904d10ba9fcb95abfb59538eab100b1fed1e` | GPL-3.0 | desktop/rootfs/usr/share/ombra-assets/README.md |
 | Kaze icons (dark variant) | commit `ab77c4d1cbfbb1fc9de1a125a3f9ed74c2513cd3` | GPL-3.0 | build/pins/kaze.txt |
@@ -30,7 +28,7 @@ license copies live in `desktop/rootfs/usr/share/ombra-assets/`.
 | Panel Colorizer plasmoid | release `v8.0.0` | GPL-3.0 | desktop/rootfs/usr/share/ombra-assets/README.md |
 | Terminus console font (Uni2-Terminus16, embedded in the boot binaries) | console-setup-linux 1.242~deb13u1 (Debian trixie) | Public domain per the console-setup package copyright; the Terminus glyphs are SIL OFL 1.1 upstream (Dimitar Toshkov Zhelev) — recorded under the stricter of the two | core/assets/Uni2-Terminus16.psf (source URL + hashes in desktop/rootfs/usr/share/ombra-assets/README.md) |
 | Ombra wallpapers and logo (first-party; `usr/share/backgrounds/ombra/` and the default wallpaper package) | sha256 per file in the assets README | GPL-3.0-or-later, same terms as the repo | desktop/rootfs/usr/share/ombra-assets/README.md |
-| Session, lock-screen and login wallpapers (`ombra-ink-4k.jpg`, SDDM `background.jpg`) | sha256 in the assets README | first-party (owner to confirm) | desktop/rootfs/usr/share/ombra-assets/README.md |
+| Session, lock-screen and login wallpapers (`ombra-ink-4k.jpg`, SDDM `background.jpg`) | sha256 in the assets README | first-party | desktop/rootfs/usr/share/ombra-assets/README.md |
 | Tor Browser launcher icon (`tor-browser.png`, derived from the pinned bundle's icon) | pinned Tor Browser bundle | Tor Project artwork under the browser's MPL-2.0 distribution; "Tor" and the onion logo are Tor Project trademarks, used only to identify the unmodified launcher | desktop/rootfs/usr/share/ombra-assets/README.md |
 
 Pins: the build enforces the sha256 in each `build/pins/*.txt` file
@@ -184,6 +182,6 @@ License 1.1; the full text ships as
 
 ## Wallets
 
-Two wallets ship on the desktop: Electrum (Debian trixie package) and
+Two wallets ship on the desktop: Electrum (sha256-pinned upstream release) and
 Feather (sha256-pinned upstream AppImage). Both are listed in the table
 above.

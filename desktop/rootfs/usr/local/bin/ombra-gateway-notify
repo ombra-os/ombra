@@ -1,0 +1,62 @@
+#!/bin/bash
+# Tell the user what the gateway reports about its Tor daemon: that it died unexpectedly, that it was stopped for good,
+# or that Debian has a newer Tor than the one installed. The gateway keeps three small values (crash tripwire, version
+# check); its control-port filter hands them out as "GETINFO ombra/gateway-state", and on the refusal line it sends when
+# Tor is down. Nothing leaves the gateway for this, and a gateway older than 1.2.2 simply does not answer the key.
+LOCK="${XDG_RUNTIME_DIR:-/tmp}/ombra-gateway-notify.pid"
+if [ -r "$LOCK" ] && kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then exit 0; fi
+echo $$ > "$LOCK"
+trap 'rm -f "$LOCK"' EXIT
+
+# prints "crashes killed update" (three single digits), or nothing when the gateway did not say
+state() {
+    local tok
+    tok=$(timeout 10 bash -c 'exec 3<>/dev/tcp/10.55.10.1/9052 || exit 1
+        printf "AUTHENTICATE\r\nGETINFO ombra/gateway-state\r\nQUIT\r\n" >&3
+        timeout 6 head -c 2048 <&3' 2>/dev/null | tr -d '\r' | grep -ao 'gateway-state=[a-z0-9:,]*' | head -n1)
+    tok=${tok#gateway-state=}
+    case "$tok" in
+        crashes:[0-9],killed:[01],update:[01]) ;;
+        *) return 1 ;;
+    esac
+    printf '%s %s %s\n' "${tok:8:1}" "${tok:17:1}" "${tok:26:1}"
+}
+
+notify() { # icon urgency(1 normal, 2 critical) title body
+    busctl --user call org.freedesktop.Notifications /org/freedesktop/Notifications org.freedesktop.Notifications Notify \
+        susssasa{sv}i "Ombra" 0 "$1" "$3" "$4" 0 1 urgency y "$2" 0 >/dev/null 2>&1
+}
+
+RESTART="restart the gateway"
+UPDATE_HOW="At the gateway's console, in Persistent mode, run: sudo ombra-update security --no-rollback"
+
+said_once=0; said_down=0; utold=0
+while :; do
+    if s=$(state); then
+        set -- $s
+        crashes=$1; killed=$2; update=$3
+        if [ "$killed" = 1 ] || [ "$crashes" -ge 2 ]; then
+            if [ "$said_down" -eq 0 ]; then
+                if [ "$killed" = 1 ]; then how="Tor was stopped by Ombra's protections."; else how="Tor stopped unexpectedly again."; fi
+                notify dialog-warning 2 "Tor is stopped" \
+                    "$how This can happen when someone is trying to break Tor. Close what you had open, check for updates, then $RESTART."
+                said_down=1
+            fi
+        elif [ "$crashes" -eq 1 ] && [ "$said_once" -eq 0 ]; then
+            notify dialog-information 1 "Tor stopped unexpectedly and was restarted" \
+                "This is usually a software fault. If it happens again, Tor stays stopped until you $RESTART."
+            said_once=1
+        fi
+        # a newer Tor: said at once, then every six hours until it is installed
+        if [ "$update" = 1 ]; then
+            if [ "$utold" -eq 0 ] || [ "$utold" -ge 360 ]; then
+                notify system-software-update 1 "A newer Tor is available for the gateway" "$UPDATE_HOW"
+                utold=0
+            fi
+            utold=$((utold + 1))
+        else
+            utold=0
+        fi
+    fi
+    sleep 60
+done

@@ -76,6 +76,8 @@ pub fn open_writer_tty() -> Option<Box<dyn Write>> {
 pub struct TtyHandle {
     file: fs::File,
     saved: Option<libc::termios>,
+    /// Restore the terminal with echo off (see `keep_echo_off_on_exit`).
+    quiet_on_exit: bool,
 }
 
 impl TtyHandle {
@@ -85,15 +87,18 @@ impl TtyHandle {
             if let Ok(f) = fs::OpenOptions::new()
                 .read(true)
                 .write(true)
-                .custom_flags(0o400000) // O_NOCTTY: never steal a controlling tty
+                .custom_flags(libc::O_NOCTTY) // never take the console as controlling tty
                 .open(path)
             {
                 let mut h = TtyHandle {
                     file: f,
                     saved: None,
+                    quiet_on_exit: false,
                 };
-                h.set_raw();
-                return Some(h);
+                // a terminal that still echoes after this must never be typed a passphrase into
+                if h.set_raw() {
+                    return Some(h);
+                }
             }
         }
         None
@@ -105,17 +110,31 @@ impl TtyHandle {
         self.file.as_raw_fd()
     }
 
-    fn set_raw(&mut self) {
+    /// Raw mode, confirmed: false when the device is a terminal whose echo could not be turned off. A device that is
+    /// not a terminal at all (nothing to echo) counts as fine.
+    fn set_raw(&mut self) -> bool {
         use std::os::unix::io::AsRawFd as _;
+        let fd = self.file.as_raw_fd();
+        // SAFETY: `t`, `raw` and `now` are valid termios values for the calls, and fd is open for the life of `self`.
         unsafe {
             let mut t: libc::termios = std::mem::zeroed();
-            if libc::tcgetattr(self.file.as_raw_fd(), &mut t) == 0 {
-                self.saved = Some(t);
-                let mut raw = t;
-                libc::cfmakeraw(&mut raw);
-                libc::tcsetattr(self.file.as_raw_fd(), libc::TCSANOW, &raw);
+            if libc::tcgetattr(fd, &mut t) != 0 {
+                return true;
             }
+            self.saved = Some(t);
+            let mut raw = t;
+            libc::cfmakeraw(&mut raw);
+            let set = libc::tcsetattr(fd, libc::TCSANOW, &raw) == 0;
+            let mut now: libc::termios = std::mem::zeroed();
+            set && libc::tcgetattr(fd, &mut now) == 0 && now.c_lflag & libc::ECHO == 0
         }
+    }
+
+    /// Leave the terminal with echo OFF when this handle goes away. For the disk-unlock keyscript: cryptsetup runs for
+    /// seconds between two prompts, and anything typed ahead in that gap would otherwise be printed in clear. The next
+    /// prompt, a getty or a display manager sets the terminal up again.
+    pub fn keep_echo_off_on_exit(&mut self) {
+        self.quiet_on_exit = true;
     }
 
     /// A FRESH nonblocking read fd — not a dup: a dup shares status flags, and O_NONBLOCK would EAGAIN every draw.
@@ -124,7 +143,7 @@ impl TtyHandle {
         for path in ["/dev/tty1", "/dev/tty"] {
             if let Ok(f) = std::fs::OpenOptions::new()
                 .read(true)
-                .custom_flags(libc::O_NONBLOCK | 0o400000) // O_NONBLOCK + O_NOCTTY
+                .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
                 .open(path)
             {
                 return Some(f);
@@ -223,8 +242,12 @@ pub fn parse_cursor_report(buf: &[u8]) -> Option<(u16, u16)> {
 
 impl Drop for TtyHandle {
     fn drop(&mut self) {
-        if let Some(t) = self.saved.take() {
+        if let Some(mut t) = self.saved.take() {
             use std::os::unix::io::AsRawFd as _;
+            if self.quiet_on_exit {
+                t.c_lflag &= !(libc::ECHO | libc::ECHONL);
+            }
+            // SAFETY: `t` is a valid termios and the fd is still open.
             unsafe {
                 libc::tcsetattr(self.file.as_raw_fd(), libc::TCSANOW, &t);
             }
@@ -283,8 +306,13 @@ pub fn install_panic_hook() {
 
 pub fn install_panic_hook_with(restore: impl Fn() + Send + Sync + 'static) {
     let previous = std::panic::take_hook();
+    // only the thread that owns the screen restores it: a panic on a worker thread must not put the terminal back into
+    // echoing, line-buffered mode while the main thread is still showing a passphrase prompt
+    let owner = std::thread::current().id();
     std::panic::set_hook(Box::new(move |info| {
-        restore();
+        if std::thread::current().id() == owner {
+            restore();
+        }
         previous(info);
     }));
 }

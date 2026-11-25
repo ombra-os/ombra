@@ -1,0 +1,13 @@
+[Unit]
+Description=Check at every boot, then daily, that the newest Tor is installed
+
+[Timer]
+# boot grace: Tor needs about a minute to bootstrap, and the clock check runs first
+OnBootSec=3min
+OnUnitInactiveSec=1d
+RandomizedDelaySec=2min
+AccuracySec=1min
+Unit=ombra-tor-freshness.service
+
+[Install]
+WantedBy=timers.target

@@ -36,7 +36,7 @@ bash core/verify-dist.sh
 | Script | Checks | Needs |
 |---|---|---|
 | `late-command-walker.py` | Installer scripts for parse errors `bash -n` misses | `python3` |
-| `test-install-iso.sh` | ISO builder for gateway, desktop and single | `xorriso` and the pinned netinst in `build/isos/` |
+| `test-install-iso.sh` | ISO builder for gateway and desktop | `xorriso` and the pinned netinst in `build/isos/` |
 | `test-public-hygiene.sh` | Tracked files for personal leaks and internal naming | |
 | `test-update.sh` | Update signing tooling and updater static checks | |
 | `test-update-logic.sh` | The real `ombra-update` against a fake root, with stubbed system tools | |
@@ -50,11 +50,7 @@ Building the installers:
 ```sh
 bash build/make-install-iso.sh gateway
 bash build/make-install-iso.sh desktop
-bash build/make-install-iso.sh single   # the single VM edition's installer ISO
 ```
-
-Or `bash scripts/build.sh --edition single`. The single edition is never
-exported as a VM image; `build/release-single-iso.sh` publishes its ISO.
 
 After changing Rust code, run `core/build.sh` and copy the binaries into the
 overlays as shown in [docs/INSTALL.md](docs/INSTALL.md); the ISO build fails

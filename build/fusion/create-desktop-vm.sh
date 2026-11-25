@@ -1,19 +1,14 @@
 #!/bin/bash
 # desktop VM on VMware Fusion: derived from the proven gateway template (drop NIC2; 6GB/4vCPU; 30GB NVMe; 3D+sound on).
 # Install on NAT with pinned MAC 00:50:56:2a:00:10; the intnet swap afterwards is a host-side change. Disk stays persistent.
-# OMBRA_EDITION=single: the one-VM edition (gateway container inside), VM ombra-single from ombra-install-single.iso,
-# MAC 00:50:56:2a:00:20; its one NIC stays on NAT for good (the container owns it). Every other key is the desktop's.
 
 set -u
 
 APP="/Applications/VMware Fusion.app"
 VMRUN="$APP/Contents/Public/vmrun"
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-case "${OMBRA_EDITION:-two-vm}" in
-  two-vm) VM_NAME=ombra-desktop; VM_MAC=00:50:56:2a:00:10 ;;
-  single) VM_NAME=ombra-single;  VM_MAC=00:50:56:2a:00:20 ;;
-  *) echo "FATAL: OMBRA_EDITION must be two-vm or single (got '$OMBRA_EDITION')" >&2; exit 2 ;;
-esac
+VM_NAME=ombra-desktop
+VM_MAC=00:50:56:2a:00:10
 DESKTOP_ISO="${OMBRA_DESKTOP_ISO:-$REPO/build/disks/ombra-install-${VM_NAME#ombra-}.iso}"
 VMDIR="$HOME/Virtual Machines.localized"
 
@@ -88,11 +83,7 @@ verify() {
   check_eq "RAM"         memSize       6144 "$VMX" 6144
   check_eq "vCPUs"       numvcpus      4    "$VMX" 4
   check_eq "installer CD" sata0:0.fileName "$DESKTOP_ISO" "$VMX" ""
-  if [ "$VM_NAME" = ombra-single ]; then
-      check_eq "NIC type (NAT, for good: the gateway container's upstream)" ethernet0.connectionType nat "$VMX" nat
-  else
-      check_eq "NIC type (NAT for install)" ethernet0.connectionType nat "$VMX" nat
-  fi
+  check_eq "NIC type (NAT for install)" ethernet0.connectionType nat "$VMX" nat
   check_eq "NIC MAC (pinned $VM_NAME role)" ethernet0.address "$VM_MAC" "$VMX" "$VM_MAC"
   check_eq "NIC addrType" ethernet0.addressType static "$VMX" static
   check_eq "time sync OFF (time.synchronize.* set stays whole; runtime time is ombra-timesync over Tor)" tools.syncTime FALSE "$VMX" FALSE
@@ -180,7 +171,7 @@ instantiate() {
       -e "s|^nvram = .*|nvram = \"$VM_NAME.nvram\"|" \
       -e "s|^extendedConfigFile = .*|extendedConfigFile = \"$VM_NAME.vmxf\"|" \
       "$BUNDLE/$VM_NAME.vmx"
-  # TEST rule: a test ISO makes displayName = "ombra-desktop-TEST" (or "ombra-single-TEST"), which export refuses
+  # TEST rule: a test ISO makes displayName = "ombra-desktop-TEST", which export refuses
   case "$DESKTOP_ISO" in
     *-test.iso) sed -i '' -e "s|^displayName = .*|displayName = \"$VM_NAME-TEST\"|" "$BUNDLE/$VM_NAME.vmx" ;;
   esac
@@ -222,26 +213,6 @@ else
     open -a "VMware Fusion"
     "$VMRUN" -T fusion start "$VMDIR/$VM_NAME.vmwarevm/$VM_NAME.vmx" \
         || echo "(vmrun start failed — open the VM in Fusion and press Play)"
-  fi
-  if [ "$VM_NAME" = ombra-single ]; then
-    cat <<'RB'
-
-== single-edition install runbook ==
-- TEST ISO (ombra-install-single-test.iso): unattended, ~15-30 min (it also
-  builds the gateway container); the disk passphrase is
-  OMBRA_TEST_DISK_PASSPHRASE (default ombra-test-disk), the password the
-  test password, and the VM POWERS OFF when done.
-- Plain ISO (the end user's): the installer asks the disk passphrase and the
-  account password (twice each), then installs and REBOOTS into the system.
-- A failed install parks on a visible console instead of finishing.
-- After the TEST install powers off, run:
-  OMBRA_EDITION=single bash build/fusion/post-install-desktop.sh
-  (keeps the NIC on NAT, detaches the installer CD, disk-first boot,
-  starts the VM). No gateway VM is needed.
-- Every boot: the unlock screen asks the disk passphrase; there is no
-  first-use screen in this edition.
-RB
-    exit 0
   fi
   cat <<'RB'
 

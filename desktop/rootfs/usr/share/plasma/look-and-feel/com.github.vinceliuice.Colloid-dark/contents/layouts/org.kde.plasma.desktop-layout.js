@@ -47,7 +47,12 @@ dock.alignment = "center"
 dock.lengthMode = "fit"
 dock.height = 2 * Math.floor(gridUnit * 2.5 / 2)
 
-dock.addWidget("org.kde.plasma.kickoff")
+// the launcher button is the Ombra mark, a hicolor icon of its own
+// (/usr/local/share/icons/hicolor/scalable/apps/ombra-launcher.svg) so
+// it holds whatever icon theme the user picks
+var launcher = dock.addWidget("org.kde.plasma.kickoff")
+launcher.currentConfigGroup = ["General"]
+launcher.writeConfig("icon", "ombra-launcher")
 
 // launcher ids MUST be real desktop-file basenames, and the ARRAY form
 // is load-bearing: a comma-joined string value reaches icontasks as one
