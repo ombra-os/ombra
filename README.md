@@ -144,7 +144,3 @@ Read the script first: [`scripts/build.sh`](scripts/build.sh). Manual steps: [do
 ## License
 
 GPL-3.0-or-later. Copyright (C) 2026 Xen. See [LICENSE](LICENSE).
-
-## Support Ombra
-
-Ombra is free to download, build and use, with no account. To support development, see [ombra-os.org/support](https://ombra-os.org/support).
